@@ -1,0 +1,1960 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log Analyzer Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --apple-blue: #0071e3;
+            --apple-blue-hover: #147ce5;
+            --apple-gray: #86868b;
+            --apple-light-gray: #f5f5f7;
+            --apple-dark-gray: #1d1d1f;
+            --apple-border-color: #e5e5ea;
+            --apple-success: #34c759;
+            --apple-warning: #ff9500;
+            --apple-error: #ff3b30;
+            --apple-radius: 12px;
+            --apple-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            --apple-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--apple-light-gray);
+            min-height: 100vh;
+            color: var(--apple-dark-gray);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            color: var(--apple-dark-gray);
+            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+        }
+
+        .header p {
+            font-size: 1rem;
+            color: var(--apple-gray);
+        }
+
+        .card {
+            background: white;
+            border-radius: var(--apple-radius);
+            box-shadow: var(--apple-shadow);
+            padding: 24px;
+            margin-bottom: 20px;
+            transition: box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            box-shadow: var(--apple-shadow-hover);
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--apple-dark-gray);
+            margin-bottom: 20px;
+        }
+
+        .tabs {
+            display: flex;
+            background: var(--apple-light-gray);
+            border-radius: var(--apple-radius);
+            padding: 4px;
+            margin-bottom: 24px;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 10px 16px;
+            background: transparent;
+            border: none;
+            border-radius: calc(var(--apple-radius) - 4px);
+            font-size: 0.9375rem;
+            font-weight: 500;
+            cursor: pointer;
+            color: var(--apple-gray);
+            transition: all 0.2s ease;
+        }
+
+        .tab:hover {
+            background: rgba(0, 113, 227, 0.08);
+            color: var(--apple-blue);
+        }
+
+        .tab.active {
+            background: white;
+            color: var(--apple-dark-gray);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .upload-area {
+            border: 2px dashed var(--apple-border-color);
+            border-radius: var(--apple-radius);
+            padding: 48px 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: var(--apple-light-gray);
+        }
+
+        .upload-area:hover {
+            border-color: var(--apple-blue);
+            background: rgba(0, 113, 227, 0.03);
+        }
+
+        .upload-area.dragover {
+            border-color: var(--apple-blue);
+            background: rgba(0, 113, 227, 0.05);
+            transform: scale(1.01);
+        }
+
+        .upload-icon {
+            font-size: 3.5rem;
+            margin-bottom: 16px;
+            opacity: 0.6;
+        }
+
+        .upload-text {
+            color: var(--apple-dark-gray);
+            font-size: 1rem;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .upload-hint {
+            color: var(--apple-gray);
+            font-size: 0.875rem;
+        }
+
+        .file-types {
+            display: inline-block;
+            padding: 2px 8px;
+            background: rgba(0, 113, 227, 0.1);
+            color: var(--apple-blue);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            margin: 2px;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .file-list {
+            margin-top: 24px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: var(--apple-light-gray);
+            border-radius: calc(var(--apple-radius) - 4px);
+            margin-bottom: 8px;
+            transition: background 0.2s ease;
+        }
+
+        .file-item:hover {
+            background: rgba(0, 113, 227, 0.05);
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+        }
+
+        .file-icon {
+            font-size: 1.5rem;
+        }
+
+        .file-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .file-name {
+            font-weight: 500;
+            color: var(--apple-dark-gray);
+            font-size: 0.9375rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .file-size {
+            color: var(--apple-gray);
+            font-size: 0.8125rem;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: calc(var(--apple-radius) - 4px);
+            font-size: 0.9375rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background: var(--apple-blue);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--apple-blue-hover);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: var(--apple-light-gray);
+            color: var(--apple-dark-gray);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(0, 0, 0, 0.06);
+        }
+
+        .btn-danger {
+            background: var(--apple-error);
+            color: white;
+            padding: 6px 12px;
+            font-size: 0.8125rem;
+        }
+
+        .btn-danger:hover {
+            background: #ff453a;
+        }
+
+        .settings-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .setting-item {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .setting-label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--apple-dark-gray);
+        }
+
+        .setting-input {
+            padding: 10px 12px;
+            border: 1px solid var(--apple-border-color);
+            border-radius: calc(var(--apple-radius) - 4px);
+            font-size: 0.9375rem;
+            background: white;
+            transition: border-color 0.2s ease;
+        }
+
+        .setting-input:focus {
+            outline: none;
+            border-color: var(--apple-blue);
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+
+        .checkbox-label input {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            border: 1px solid var(--apple-border-color);
+            accent-color: var(--apple-blue);
+        }
+
+        .actions-bar {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            padding-top: 16px;
+            border-top: 1px solid var(--apple-border-color);
+        }
+
+        .progress-container {
+            display: none;
+            margin-top: 24px;
+        }
+
+        .progress-container.active {
+            display: block;
+        }
+
+        .stage-progress {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding: 16px;
+            background: var(--apple-light-gray);
+            border-radius: calc(var(--apple-radius) - 4px);
+        }
+
+        .stage {
+            flex: 1;
+            text-align: center;
+            position: relative;
+            padding: 8px 0;
+        }
+
+        .stage:not(:last-child)::after {
+            content: '';
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            width: 100%;
+            height: 2px;
+            background: var(--apple-border-color);
+            z-index: 1;
+        }
+
+        .stage.active:not(:last-child)::after {
+            background: var(--apple-blue);
+        }
+
+        .stage-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--apple-border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 8px;
+            font-size: 1rem;
+            position: relative;
+            z-index: 2;
+            transition: all 0.3s ease;
+        }
+
+        .stage.active .stage-icon {
+            background: var(--apple-blue);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        .stage.completed .stage-icon {
+            background: var(--apple-success);
+            color: white;
+        }
+
+        .stage-label {
+            font-size: 0.75rem;
+            color: var(--apple-gray);
+            font-weight: 500;
+        }
+
+        .stage.active .stage-label,
+        .stage.completed .stage-label {
+            color: var(--apple-dark-gray);
+        }
+
+        .stage-detail {
+            font-size: 0.6875rem;
+            color: var(--apple-gray);
+            margin-top: 4px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: var(--apple-border-color);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--apple-blue);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        .status-text {
+            text-align: center;
+            color: var(--apple-gray);
+            font-size: 0.875rem;
+        }
+
+        .error-message {
+            background: rgba(255, 59, 48, 0.05);
+            border: 1px solid rgba(255, 59, 48, 0.2);
+            color: var(--apple-error);
+            padding: 12px 16px;
+            border-radius: calc(var(--apple-radius) - 4px);
+            margin-top: 16px;
+            font-size: 0.875rem;
+            display: none;
+        }
+
+        .reports-container {
+            margin-top: 24px;
+        }
+
+        .report-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--apple-light-gray);
+            padding: 16px;
+            border-radius: calc(var(--apple-radius) - 4px);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--apple-dark-gray);
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--apple-gray);
+        }
+
+        .report-list {
+            margin-top: 16px;
+        }
+
+        .report-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px;
+            background: var(--apple-light-gray);
+            border-radius: calc(var(--apple-radius) - 4px);
+            margin-bottom: 8px;
+            transition: background 0.2s ease;
+        }
+
+        .report-item:hover {
+            background: rgba(0, 113, 227, 0.05);
+        }
+
+        .report-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+        }
+
+        .report-icon {
+            font-size: 1.5rem;
+        }
+
+        .report-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .report-name {
+            font-weight: 500;
+            color: var(--apple-dark-gray);
+            font-size: 0.9375rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .report-meta {
+            color: var(--apple-gray);
+            font-size: 0.8125rem;
+        }
+
+        .report-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--apple-border-color);
+            border-top: 2px solid var(--apple-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 48px 24px;
+            color: var(--apple-gray);
+        }
+
+        .empty-icon {
+            font-size: 3rem;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .reconnect-banner {
+            display: none;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: rgba(0, 113, 227, 0.08);
+            border: 1px solid rgba(0, 113, 227, 0.25);
+            border-radius: calc(var(--apple-radius) - 4px);
+            margin-bottom: 16px;
+            color: var(--apple-blue);
+            font-size: 0.875rem;
+        }
+
+        .reconnect-banner.active {
+            display: flex;
+        }
+
+        .reconnect-banner.error {
+            background: rgba(255, 149, 0, 0.08);
+            border-color: rgba(255, 149, 0, 0.3);
+            color: var(--apple-warning);
+        }
+
+        .reconnect-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(0, 113, 227, 0.3);
+            border-top-color: var(--apple-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            flex-shrink: 0;
+        }
+
+        .reconnect-text {
+            flex: 1;
+        }
+
+        .reconnect-action {
+            background: var(--apple-blue);
+            color: white;
+            border: none;
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .reconnect-action:hover {
+            background: var(--apple-blue-hover);
+        }
+
+        /* 管理员模式样式 */
+        .admin-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: rgba(255, 149, 0, 0.1);
+            color: #ff9500;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .admin-section {
+            background: rgba(255, 149, 0, 0.05);
+            border: 1px solid rgba(255, 149, 0, 0.2);
+            border-radius: var(--apple-radius);
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .admin-section h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--apple-dark-gray);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .admin-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .admin-card {
+            background: white;
+            padding: 16px;
+            border-radius: calc(var(--apple-radius) - 4px);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid transparent;
+        }
+
+        .admin-card:hover {
+            box-shadow: var(--apple-shadow-hover);
+            border-color: var(--apple-blue);
+        }
+
+        .admin-card-icon {
+            font-size: 1.5rem;
+            margin-bottom: 8px;
+        }
+
+        .admin-card-title {
+            font-size: 0.9375rem;
+            font-weight: 500;
+            color: var(--apple-dark-gray);
+            margin-bottom: 4px;
+        }
+
+        .admin-card-desc {
+            font-size: 0.8125rem;
+            color: var(--apple-gray);
+        }
+
+        .user-switcher {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--apple-light-gray);
+            border-radius: calc(var(--apple-radius) - 4px);
+        }
+
+        .user-switcher select {
+            padding: 6px 10px;
+            border: 1px solid var(--apple-border-color);
+            border-radius: 6px;
+            font-size: 0.875rem;
+            background: white;
+            cursor: pointer;
+        }
+
+        .user-switcher button {
+            padding: 6px 12px;
+            font-size: 0.8125rem;
+        }
+
+        @media (max-width: 600px) {
+            .admin-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .settings-section {
+                grid-template-columns: 1fr;
+            }
+
+            .report-stats {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .stage-progress {
+                flex-wrap: wrap;
+            }
+
+            .stage {
+                flex: 0 0 calc(50% - 8px);
+            }
+
+            .stage:not(:last-child)::after {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Log Analyzer Agent</h1>
+            <p>日志分析agent</p>
+            <div id="adminIndicator" class="admin-indicator" style="display: none;">
+                <span>🔒</span>
+                <span>管理员模式</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="tabs">
+                <button class="tab active" data-tab="upload">上传文件</button>
+                <button class="tab" data-tab="history">历史报告</button>
+            </div>
+
+            <div id="upload-tab" class="tab-content active">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📁</div>
+                    <div class="upload-text">拖放文件到此处，或点击选择</div>
+                    <div class="upload-hint">支持的文件类型：<span class="file-types">.log</span> <span class="file-types">.txt</span> <span class="file-types">.zip</span> <span class="file-types">.pcap</span></div>
+                    <input type="file" id="fileInput" multiple accept=".log,.txt,.zip,.pcap">
+                </div>
+
+                <div class="file-list" id="uploadedFiles"></div>
+
+                <div class="settings-section">
+                    <div class="setting-item">
+                        <label class="setting-label">分块大小 (行数)</label>
+                        <input type="number" class="setting-input" id="chunkSize" value="1000000" min="10000" max="10000000">
+                    </div>
+                    <div class="setting-item">
+                        <label class="setting-label checkbox-label">
+                            <input type="checkbox" id="forceRestart">
+                            强制重新处理
+                        </label>
+                    </div>
+                </div>
+
+                <div class="actions-bar">
+                    <button class="btn btn-primary" id="startBtn" disabled onclick="startProcessing()">开始分析</button>
+                    <button class="btn btn-secondary" onclick="clearSelection()">清除选择</button>
+                </div>
+
+                <div class="reconnect-banner" id="reconnectBanner">
+                    <span class="reconnect-spinner" id="reconnectSpinner"></span>
+                    <span class="reconnect-text" id="reconnectText">正在恢复任务监控...</span>
+                    <button class="reconnect-action" id="reconnectAction" onclick="reconnectActiveTask()" style="display:none;">重新连接</button>
+                </div>
+
+                <div class="progress-container" id="progressContainer">
+                    <div class="stage-progress" id="stageProgress">
+                        <div class="stage" id="stage1">
+                            <div class="stage-icon">📋</div>
+                            <div class="stage-label">文件准备</div>
+                            <div class="stage-detail">加载文件</div>
+                        </div>
+                        <div class="stage" id="stage2">
+                            <div class="stage-icon">📝</div>
+                            <div class="stage-label">日志解析</div>
+                            <div class="stage-detail">分析日志内容</div>
+                        </div>
+                        <div class="stage" id="stage3">
+                            <div class="stage-icon">🤖</div>
+                            <div class="stage-label">AI 分析</div>
+                            <div class="stage-detail">调用 AI 分析</div>
+                        </div>
+                        <div class="stage" id="stage4">
+                            <div class="stage-icon">📊</div>
+                            <div class="stage-label">报告生成</div>
+                            <div class="stage-detail">生成分析报告</div>
+                        </div>
+                    </div>
+
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="status-text" id="statusText">准备中...</div>
+                </div>
+
+                <div id="errorMessage" class="error-message"></div>
+
+                <div class="reports-container" id="reportsContainer"></div>
+            </div>
+
+            <div id="history-tab" class="tab-content">
+                <!-- 管理员模式切换 -->
+                <div id="adminSection" class="admin-section" style="display: none;">
+                    <h3>🔑 管理员控制台</h3>
+                    <div class="user-switcher">
+                        <select id="adminUserId">
+                            <option value="admin001">admin001</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="switchToAdminMode()">切换管理员模式</button>
+                        <button class="btn btn-secondary" onclick="exitAdminMode()">退出管理员</button>
+                    </div>
+                </div>
+
+                <!-- 管理员功能卡片 -->
+                <div id="adminFunctions" class="admin-section" style="display: none;">
+                    <h3>⚙️ 管理员功能</h3>
+                    <div class="admin-grid">
+                        <div class="admin-card" onclick="showAdminReportList()">
+                            <div class="admin-card-icon">📋</div>
+                            <div class="admin-card-title">历史报告管理</div>
+                            <div class="admin-card-desc">查看和管理所有历史报告</div>
+                        </div>
+                        <div class="admin-card" onclick="showActionLogs()">
+                            <div class="admin-card-icon">📝</div>
+                            <div class="admin-card-title">操作日志查询</div>
+                            <div class="admin-card-desc">查看用户操作历史记录</div>
+                        </div>
+                        <div class="admin-card" onclick="showActionTypes()">
+                            <div class="admin-card-icon">🏷️</div>
+                            <div class="admin-card-title">操作类型列表</div>
+                            <div class="admin-card-desc">查看支持的操作类型</div>
+                        </div>
+                        <div class="admin-card" onclick="showActionCount()">
+                            <div class="admin-card-icon">📊</div>
+                            <div class="admin-card-title">操作统计</div>
+                            <div class="admin-card-desc">统计用户操作记录数量</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 普通用户入口 - 切换管理员模式 -->
+                <div id="adminSwitch" style="display: none; text-align: center; padding: 20px;">
+                    <div class="empty-icon">🔑</div>
+                    <div style="font-size: 1rem; font-weight: 500; margin-bottom: 12px;">管理员模式</div>
+                    <div style="font-size: 0.875rem; color: var(--apple-gray); margin-bottom: 16px;">点击下方按钮切换到管理员模式，访问历史记录接口</div>
+                    <button class="btn btn-primary" onclick="switchToAdminMode()">切换到管理员模式</button>
+                </div>
+
+                <!-- 历史报告列表 -->
+                <div class="history-section" id="historySection"></div>
+
+                <!-- 管理员报告列表模态框 -->
+                <div id="adminReportModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;" onclick="closeAdminModal()">
+                    <div style="background: white; border-radius: var(--apple-radius); padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;" onclick="event.stopPropagation()">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <h2>历史报告管理</h2>
+                            <button class="btn btn-secondary" onclick="closeAdminModal()">关闭</button>
+                        </div>
+                        <div id="adminReportList"></div>
+                    </div>
+                </div>
+
+                <!-- 操作日志模态框 -->
+                <div id="actionLogModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;" onclick="closeAdminModal()">
+                    <div style="background: white; border-radius: var(--apple-radius); padding: 24px; max-width: 800px; width: 90%; max-height: 80vh; overflow-y: auto;" onclick="event.stopPropagation()">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <h2>操作日志查询</h2>
+                            <button class="btn btn-secondary" onclick="closeAdminModal()">关闭</button>
+                        </div>
+                        <div style="margin-bottom: 16px;">
+                            <input type="text" placeholder="开始时间 (ISO格式)" id="logStartTime" class="setting-input" style="width: 48%; margin-right: 4%;">
+                            <input type="text" placeholder="结束时间 (ISO格式)" id="logEndTime" class="setting-input" style="width: 48%;">
+                        </div>
+                        <div style="margin-bottom: 16px;">
+                            <select id="logActionType" class="setting-input" style="width: 100%;">
+                                <option value="">全部类型</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="queryActionLogs()">查询日志</button>
+                        <div id="actionLogList" style="margin-top: 16px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedFiles = [];
+        let currentTaskId = null;
+        let totalFiles = 0;
+        let processedFiles = 0;
+        let activeTaskInfo = null;
+        let taskPollInterval = null;
+        let reconnectAttempts = 0;
+        let maxReconnectAttempts = 10;
+
+        const STORAGE_KEYS = {
+            ACTIVE_TASK: 'logAnalyzer.activeTask',
+            USER_ID: 'logAnalyzer.userId',
+            USER_NAME: 'logAnalyzer.userName'
+        };
+
+        const API_BASE = window.location.origin;
+
+        function getCurrentUserId() {
+            return localStorage.getItem(STORAGE_KEYS.USER_ID) || 'hanmeimei';
+        }
+
+        function getCurrentUserName() {
+            return localStorage.getItem(STORAGE_KEYS.USER_NAME) || '';
+        }
+
+        function buildTaskUrl(taskId) {
+            return `${API_BASE}/api/task/${taskId}`;
+        }
+
+        function saveActiveTask(taskInfo) {
+            try {
+                activeTaskInfo = taskInfo;
+                localStorage.setItem(STORAGE_KEYS.ACTIVE_TASK, JSON.stringify(taskInfo));
+            } catch (e) {
+                console.warn('保存活动任务失败:', e);
+            }
+        }
+
+        function loadActiveTask() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEYS.ACTIVE_TASK);
+                if (!raw) return null;
+                const info = JSON.parse(raw);
+                if (info && info.task_id && info.status && info.status !== 'completed' && info.status !== 'failed') {
+                    return info;
+                }
+                return null;
+            } catch (e) {
+                console.warn('读取活动任务失败:', e);
+                return null;
+            }
+        }
+
+        function clearActiveTask() {
+            try {
+                localStorage.removeItem(STORAGE_KEYS.ACTIVE_TASK);
+                activeTaskInfo = null;
+            } catch (e) {
+                console.warn('清除活动任务失败:', e);
+            }
+        }
+
+        function showReconnectBanner(message, isError = false, showAction = false) {
+            const banner = document.getElementById('reconnectBanner');
+            const text = document.getElementById('reconnectText');
+            const spinner = document.getElementById('reconnectSpinner');
+            const action = document.getElementById('reconnectAction');
+            if (!banner) return;
+
+            banner.classList.add('active');
+            banner.classList.toggle('error', isError);
+            text.textContent = message;
+            spinner.style.display = isError ? 'none' : 'inline-block';
+            action.style.display = showAction ? 'inline-block' : 'none';
+        }
+
+        function hideReconnectBanner() {
+            const banner = document.getElementById('reconnectBanner');
+            if (banner) banner.classList.remove('active');
+        }
+
+        async function init() {
+            await loadHistory();
+            await tryResumeActiveTask();
+        }
+
+        async function tryResumeActiveTask() {
+            const taskInfo = loadActiveTask();
+            if (!taskInfo) {
+                return;
+            }
+            if (taskInfo.user_id && taskInfo.user_id !== getCurrentUserId()) {
+                showReconnectBanner(
+                    `检测到用户 ${taskInfo.user_id} 的未完成任务（当前用户为 ${getCurrentUserId()}），已忽略`,
+                    true
+                );
+                setTimeout(() => {
+                    clearActiveTask();
+                    hideReconnectBanner();
+                }, 4000);
+                return;
+            }
+
+            currentTaskId = taskInfo.task_id;
+            totalFiles = taskInfo.total_files || 1;
+            processedFiles = taskInfo.processed_files || 0;
+
+            const taskUrl = buildTaskUrl(currentTaskId);
+            showReconnectBanner(`检测到刷新前的任务，正在重新连接：${currentTaskId}`);
+
+            const progressContainer = document.getElementById('progressContainer');
+            if (progressContainer) progressContainer.classList.add('active');
+
+            resetStages();
+            if (taskInfo.status === 'processing') {
+                setStage(taskInfo.stage_index || 1, taskInfo.stage_detail || '已恢复监控');
+            }
+
+            document.getElementById('statusText').textContent =
+                `已恢复任务监控 (${currentTaskId})`;
+            document.getElementById('startBtn').disabled = true;
+
+            try {
+                await pollTaskUntilDone(taskInfo);
+                showReconnectBanner('任务已重新连接并完成，正在加载结果...');
+                setTimeout(async () => {
+                    hideReconnectBanner();
+                    clearActiveTask();
+                    currentTaskId = null;
+                    document.getElementById('progressFill').style.width = '100%';
+                    document.getElementById('statusText').textContent =
+                        `恢复的任务已完成 (${taskInfo.task_id})`;
+                    document.querySelectorAll('.stage').forEach(stage => {
+                        stage.classList.add('completed');
+                        stage.classList.remove('active');
+                    });
+                    document.getElementById('startBtn').disabled = false;
+                    await loadHistory();
+                }, 1200);
+            } catch (err) {
+                showReconnectBanner(
+                    `恢复任务失败: ${err.message}（可点击"重新连接"重试）`,
+                    true,
+                    true
+                );
+            }
+        }
+
+        async function reconnectActiveTask() {
+            const taskInfo = loadActiveTask();
+            if (!taskInfo) {
+                hideReconnectBanner();
+                return;
+            }
+            reconnectAttempts = 0;
+            await pollTaskUntilDone(taskInfo);
+        }
+
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+
+        const SUPPORTED_EXTENSIONS = ['.log', '.txt', '.zip', '.pcap'];
+
+        async function handleFiles(files) {
+            for (const file of files) {
+                const extension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+                if (!SUPPORTED_EXTENSIONS.includes(extension)) {
+                    showError(`不支持的文件类型: ${file.name}\n支持的类型: ${SUPPORTED_EXTENSIONS.join(', ')}`);
+                    continue;
+                }
+                await uploadFile(file);
+            }
+            renderUploadedFiles();
+            updateStartButton();
+        }
+
+        function showError(message) {
+            alert(message);
+        }
+
+        async function uploadFile(file) {
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const userId = getCurrentUserId();
+
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    headers: {
+                        'X-User-Id': userId
+                    },
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.code === 0 && result.data) {
+                    const data = result.data;
+                    if (data.extracted_files && data.extracted_files.length > 0) {
+                        for (const extractedFile of data.extracted_files) {
+                            let filePath, fileName, fileSize;
+                            if (typeof extractedFile === 'string') {
+                                filePath = extractedFile;
+                                fileName = extractedFile.split('/').pop();
+                                fileSize = '提取文件';
+                            } else {
+                                filePath = extractedFile.path;
+                                fileName = extractedFile.name;
+                                fileSize = extractedFile.size || '提取文件';
+                            }
+
+                            const ext = filePath.toLowerCase();
+                            if (ext.endsWith('.log') || ext.endsWith('.txt')) {
+                                const exists = selectedFiles.some(f => f.path === filePath);
+                                if (!exists) {
+                                    selectedFiles.push({
+                                        path: filePath,
+                                        name: fileName,
+                                        size: 0,
+                                        size_str: fileSize,
+                                        uploaded: true,
+                                        extracted: true
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    if (!file.name.toLowerCase().endsWith('.zip')) {
+                        const exists = selectedFiles.some(f => f.path === data.file_path);
+                        if (!exists) {
+                            selectedFiles.push({
+                                path: data.file_path,
+                                name: data.file_name,
+                                size: (data.file_size || '').length,
+                                size_str: data.file_size || '',
+                                uploaded: true
+                            });
+                        }
+                    }
+                } else {
+                    showError(result.message || '上传失败');
+                }
+            } catch (error) {
+                console.error('Error uploading file:', error);
+                showError('上传文件时发生错误: ' + (error.message || ''));
+            }
+        }
+
+        function renderUploadedFiles() {
+            const container = document.getElementById('uploadedFiles');
+            const uploadedOnly = selectedFiles.filter(f => f.uploaded);
+
+            if (uploadedOnly.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+
+            container.innerHTML = uploadedOnly.map((file, index) => `
+                <div class="file-item">
+                    <div class="file-info">
+                        <span class="file-icon">📄</span>
+                        <div class="file-details">
+                            <div class="file-name">${file.name}</div>
+                            <div class="file-size">${file.size_str}</div>
+                        </div>
+                    </div>
+                    <button class="btn btn-danger" onclick="removeFile(${index})">移除</button>
+                </div>
+            `).join('');
+        }
+
+        function removeFile(index) {
+            const uploadedOnly = selectedFiles.filter(f => f.uploaded);
+            const fileToRemove = uploadedOnly[index];
+            selectedFiles = selectedFiles.filter(f => f.path !== fileToRemove.path);
+            renderUploadedFiles();
+            updateStartButton();
+        }
+
+        function updateStartButton() {
+            const btn = document.getElementById('startBtn');
+            btn.disabled = selectedFiles.length === 0;
+            btn.textContent = selectedFiles.length > 1
+                ? `开始分析 (${selectedFiles.length} 个文件)`
+                : '开始分析';
+        }
+
+        function clearSelection() {
+            selectedFiles = [];
+            totalFiles = 0;
+            processedFiles = 0;
+            renderUploadedFiles();
+            updateStartButton();
+            document.getElementById('reportsContainer').innerHTML = '';
+            document.getElementById('errorMessage').style.display = 'none';
+            resetStages();
+        }
+
+        function resetStages() {
+            document.querySelectorAll('.stage').forEach(stage => {
+                stage.classList.remove('active', 'completed');
+            });
+            document.getElementById('progressFill').style.width = '0%';
+        }
+
+        function setStage(stageIndex, detail = '') {
+            const stages = document.querySelectorAll('.stage');
+            stages.forEach((stage, index) => {
+                if (index < stageIndex) {
+                    stage.classList.add('completed');
+                    stage.classList.remove('active');
+                } else if (index === stageIndex) {
+                    stage.classList.add('active');
+                    stage.classList.remove('completed');
+                } else {
+                    stage.classList.remove('active', 'completed');
+                }
+            });
+
+            const currentStage = stages[stageIndex];
+            if (currentStage && detail) {
+                const detailEl = currentStage.querySelector('.stage-detail');
+                if (detailEl) {
+                    detailEl.textContent = detail;
+                }
+            }
+        }
+
+        async function startProcessing() {
+            if (selectedFiles.length === 0) return;
+
+            const chunkSize = parseInt(document.getElementById('chunkSize').value);
+            const forceRestart = document.getElementById('forceRestart').checked;
+
+            const progressContainer = document.getElementById('progressContainer');
+            progressContainer.classList.add('active');
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('reportsContainer').innerHTML = '';
+            document.getElementById('errorMessage').style.display = 'none';
+            hideReconnectBanner();
+
+            resetStages();
+            totalFiles = selectedFiles.length;
+            processedFiles = 0;
+
+            setStage(0, `加载 ${totalFiles} 个文件`);
+
+            try {
+                const allReports = [];
+
+                for (let i = 0; i < selectedFiles.length; i++) {
+                    const file = selectedFiles[i];
+                    processedFiles = i;
+
+                    setStage(0, `处理文件 ${i + 1}/${totalFiles}: ${file.name}`);
+                    document.getElementById('statusText').textContent = `正在处理文件 ${i + 1}/${totalFiles}: ${file.name}`;
+
+                    const response = await fetch('/api/process', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-User-Id': getCurrentUserId()
+                        },
+                        body: JSON.stringify({
+                            file_path: file.path,
+                            chunk_size: chunkSize,
+                            force_restart: forceRestart
+                        })
+                    });
+
+                    const result = await response.json();
+                    if (result.code !== 0) {
+                        throw new Error(result.message || '创建任务失败');
+                    }
+                    currentTaskId = result.data.task_id;
+
+                    saveActiveTask({
+                        task_id: currentTaskId,
+                        user_id: getCurrentUserId(),
+                        file_name: file.name,
+                        file_path: file.path,
+                        file_index: i,
+                        total_files: totalFiles,
+                        processed_files: processedFiles,
+                        status: 'pending',
+                        stage_index: 0,
+                        stage_detail: '任务已创建',
+                        created_at: Date.now()
+                    });
+
+                    await pollTaskUntilDone({
+                        task_id: currentTaskId,
+                        user_id: getCurrentUserId(),
+                        file_name: file.name,
+                        file_path: file.path,
+                        file_index: i,
+                        total_files: totalFiles,
+                        processed_files: processedFiles,
+                        status: 'pending',
+                        stage_index: 0,
+                        stage_detail: '任务已创建',
+                        created_at: Date.now()
+                    });
+
+                    const taskResponse = await fetch(buildTaskUrl(currentTaskId), {
+                        headers: { 'X-User-Id': getCurrentUserId() }
+                    });
+                    const task = await taskResponse.json();
+
+                    if (task.data && task.data.reports && task.data.reports.length > 0) {
+                        allReports.push(...task.data.reports);
+                    }
+                }
+
+                setStage(3, '报告生成完成');
+                document.getElementById('progressFill').style.width = '100%';
+                document.getElementById('statusText').textContent = `分析完成！共处理 ${totalFiles} 个文件`;
+
+                document.querySelectorAll('.stage').forEach(stage => {
+                    stage.classList.add('completed');
+                    stage.classList.remove('active');
+                });
+
+                if (allReports.length > 0) {
+                    renderReports(allReports);
+                }
+
+                await loadHistory();
+                document.getElementById('startBtn').disabled = false;
+                currentTaskId = null;
+                clearActiveTask();
+                hideReconnectBanner();
+
+            } catch (error) {
+                showError('分析失败: ' + (error.message || ''));
+                document.getElementById('startBtn').disabled = false;
+                progressContainer.classList.remove('active');
+            }
+        }
+
+        function inferStageFromMessage(message) {
+            if (!message) return 1;
+            if (message.includes('解析') || message.includes('统计') || message.includes('加载') || message.includes('准备')) return 1;
+            if (message.includes('LLM') || message.includes('分析') || message.includes('AI')) return 2;
+            if (message.includes('报告') || message.includes('保存') || message.includes('生成')) return 3;
+            return 1;
+        }
+
+        async function pollTaskUntilDone(taskInfo) {
+            return new Promise((resolve, reject) => {
+                let isResolved = false;
+                let pollDelay = 1000;
+                const baseDelay = 1000;
+                const maxDelay = 5000;
+
+                const stop = () => {
+                    if (taskPollInterval) {
+                        clearTimeout(taskPollInterval);
+                        taskPollInterval = null;
+                    }
+                };
+
+                const finishResolve = (val) => {
+                    if (isResolved) return;
+                    isResolved = true;
+                    stop();
+                    resolve(val);
+                };
+
+                const finishReject = (err) => {
+                    if (isResolved) return;
+                    isResolved = true;
+                    stop();
+                    reject(err);
+                };
+
+                const tick = async () => {
+                    if (isResolved) return;
+                    try {
+                        const response = await fetch(buildTaskUrl(taskInfo.task_id), {
+                            headers: { 'X-User-Id': getCurrentUserId() }
+                        });
+                        if (!response.ok) {
+                            throw new Error(`HTTP ${response.status}`);
+                        }
+                        const payload = await response.json();
+                        const task = (payload && payload.data) ? payload.data : payload;
+
+                        reconnectAttempts = 0;
+                        hideReconnectBanner();
+
+                        const fileProgress = (task.progress || 0) / 100;
+                        const totalProgress = (taskInfo.file_index + fileProgress) / taskInfo.total_files * 100;
+                        document.getElementById('progressFill').style.width = totalProgress + '%';
+
+                        const message = task.message || '';
+                        const stageIndex = inferStageFromMessage(message);
+                        setStage(stageIndex, message);
+
+                        const updatedInfo = {
+                            ...taskInfo,
+                            status: task.status,
+                            stage_index: stageIndex,
+                            stage_detail: message,
+                            progress: task.progress,
+                            updated_at: Date.now()
+                        };
+                        saveActiveTask(updatedInfo);
+
+                        document.getElementById('statusText').textContent =
+                            `监控任务 ${taskInfo.task_id}：${message || '处理中...'}`;
+
+                        if (task.status === 'completed') {
+                            finishResolve(task);
+                        } else if (task.status === 'failed') {
+                            clearActiveTask();
+                            hideReconnectBanner();
+                            finishReject(new Error(task.error || '处理失败'));
+                        } else {
+                            pollDelay = baseDelay;
+                            taskPollInterval = setTimeout(tick, pollDelay);
+                        }
+                    } catch (err) {
+                        reconnectAttempts += 1;
+                        pollDelay = Math.min(pollDelay * 1.5, maxDelay);
+
+                        if (reconnectAttempts > maxReconnectAttempts) {
+                            clearActiveTask();
+                            hideReconnectBanner();
+                            finishReject(new Error(`与任务接口断开连接超过 ${maxReconnectAttempts} 次尝试`));
+                            return;
+                        }
+
+                        showReconnectBanner(
+                            `任务接口请求失败，${Math.round(pollDelay / 1000)}s 后重试（第 ${reconnectAttempts}/${maxReconnectAttempts} 次）: ${err.message}`,
+                            true,
+                            true
+                        );
+
+                        taskPollInterval = setTimeout(tick, pollDelay);
+                    }
+                };
+
+                taskPollInterval = setTimeout(tick, 0);
+            });
+        }
+
+        function renderReports(reports) {
+            const container = document.getElementById('reportsContainer');
+
+            const statsHtml = `
+                <div class="report-stats">
+                    <div class="stat-card">
+                        <div class="stat-value">${reports.length}</div>
+                        <div class="stat-label">生成报告</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${selectedFiles.length}</div>
+                        <div class="stat-label">处理文件</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${reports.filter(r => r.type === 'markdown').length}</div>
+                        <div class="stat-label">Markdown</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${reports.filter(r => r.type === 'json').length}</div>
+                        <div class="stat-label">JSON</div>
+                    </div>
+                </div>
+            `;
+
+            container.innerHTML = statsHtml + `
+                <div class="report-list">
+                    ${reports.map(report => `
+                        <div class="report-item">
+                            <div class="report-info">
+                                <span class="report-icon">${report.type === 'markdown' ? '📝' : '📊'}</span>
+                                <div class="report-details">
+                                    <div class="report-name">${report.name}</div>
+                                </div>
+                            </div>
+                            <div class="report-actions">
+                                <button class="btn btn-primary" onclick="downloadReport('${encodeURIComponent(report.path)}')">下载</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        async function downloadReport(path) {
+            window.open(`/api/download/${decodeURIComponent(path)}`, '_blank');
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        async function loadHistory() {
+            try {
+                const response = await fetch('/api/reports');
+                const data = await response.json();
+                // 正确解析后端返回的格式
+                const reports = data.data && data.data.reports ? data.data.reports : [];
+                renderHistory(reports);
+            } catch (error) {
+                console.error('Error loading history:', error);
+                renderHistory([]);
+            }
+        }
+
+        function renderHistory(reports) {
+            const container = document.getElementById('historySection');
+            const MAX_DISPLAY_COUNT = 50;
+            const DOWNLOADABLE_TYPES = ['pdf', 'word'];
+
+            if (reports.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📋</div>
+                        <div>暂无历史报告</div>
+                        <div style="font-size: 0.875rem; margin-top: 8px;">上传日志文件开始分析</div>
+                    </div>
+                `;
+                return;
+            }
+
+            // 限制只显示前50条记录
+            const displayedReports = reports.slice(0, MAX_DISPLAY_COUNT);
+            const hasMore = reports.length > MAX_DISPLAY_COUNT;
+
+            container.innerHTML = `
+                ${hasMore ? `
+                    <div style="margin-bottom: 12px; padding: 8px 12px; background: rgba(0, 113, 227, 0.08); border-radius: 8px; font-size: 0.875rem; color: var(--apple-blue);">
+                        显示前 ${MAX_DISPLAY_COUNT} 条记录，共 ${reports.length} 条历史记录
+                    </div>
+                ` : ''}
+                <div class="report-list">
+                    ${displayedReports.map(report => {
+                        const isDownloadable = DOWNLOADABLE_TYPES.includes(report.type);
+                        const icon = report.type === 'pdf' ? '📄' : report.type === 'word' ? '📝' : report.type === 'markdown' ? '📘' : '📊';
+                        return `
+                            <div class="report-item">
+                                <div class="report-info">
+                                    <span class="report-icon">${icon}</span>
+                                    <div class="report-details">
+                                        <div class="report-name">${report.name}</div>
+                                        <div class="report-meta">${report.size_str} · ${new Date(report.modified).toLocaleString()}</div>
+                                    </div>
+                                </div>
+                                <div class="report-actions">
+                                    ${isDownloadable ? `
+                                        <button class="btn btn-primary" onclick="downloadReport('${encodeURIComponent(report.path)}')">下载</button>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab + '-tab').classList.add('active');
+
+                if (tab.dataset.tab === 'history') {
+                    loadHistory();
+                    updateAdminUI();
+                }
+            });
+        });
+
+        // ==================== 管理员模式功能 ====================
+
+        const ADMIN_USER_ID = 'admin001';
+        const ADMIN_USERNAME = 'useradmin';
+        const ADMIN_ENTRY_USER = 'hanmeimei'; // 仅允许此用户看到管理员入口
+
+        function isAdminMode() {
+            return localStorage.getItem(STORAGE_KEYS.USER_NAME) === ADMIN_USERNAME;
+        }
+
+        function canAccessAdminEntry() {
+            // 仅允许特定用户看到管理员入口
+            const currentUserId = getCurrentUserId();
+            const currentUserName = getCurrentUserName();
+            // 如果已经是管理员模式，或者当前用户是 hanmeimei，则允许访问管理员入口
+            return isAdminMode() || currentUserId === ADMIN_ENTRY_USER;
+        }
+
+        function switchToAdminMode() {
+            if (!canAccessAdminEntry()) {
+                alert('您没有权限访问管理员模式！');
+                return;
+            }
+            localStorage.setItem(STORAGE_KEYS.USER_ID, ADMIN_USER_ID);
+            localStorage.setItem(STORAGE_KEYS.USER_NAME, ADMIN_USERNAME);
+            updateAdminUI();
+            alert('已切换到管理员模式！');
+        }
+
+        function exitAdminMode() {
+            localStorage.setItem(STORAGE_KEYS.USER_ID, 'hanmeimei');
+            localStorage.removeItem(STORAGE_KEYS.USER_NAME);
+            updateAdminUI();
+            alert('已退出管理员模式！');
+        }
+
+        function updateAdminUI() {
+            const isAdmin = isAdminMode();
+            const canSeeAdminEntry = canAccessAdminEntry();
+            
+            // 更新管理员指示器
+            const indicator = document.getElementById('adminIndicator');
+            indicator.style.display = isAdmin ? 'inline-flex' : 'none';
+
+            // 更新管理员区域
+            const adminSection = document.getElementById('adminSection');
+            const adminFunctions = document.getElementById('adminFunctions');
+            const adminSwitch = document.getElementById('adminSwitch');
+            const historySection = document.getElementById('historySection');
+
+            if (isAdmin) {
+                adminSection.style.display = 'block';
+                adminFunctions.style.display = 'block';
+                adminSwitch.style.display = 'none';
+                historySection.style.display = 'block';
+            } else {
+                adminSection.style.display = 'none';
+                adminFunctions.style.display = 'none';
+                // 仅允许特定用户看到管理员切换入口
+                adminSwitch.style.display = canSeeAdminEntry ? 'block' : 'none';
+                historySection.style.display = 'block';
+            }
+        }
+
+        async function showAdminReportList() {
+            try {
+                const response = await fetch('/api/history/reports', {
+                    headers: {
+                        'X-User-Id': ADMIN_USER_ID,
+                        'X-Username': ADMIN_USERNAME
+                    }
+                });
+                const result = await response.json();
+                
+                if (result.code !== 0) {
+                    alert('获取报告列表失败: ' + result.message);
+                    return;
+                }
+
+                const container = document.getElementById('adminReportList');
+                const reports = result.data.reports;
+
+                if (reports.length === 0) {
+                    container.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div><div>暂无历史报告</div></div>';
+                } else {
+                    container.innerHTML = `
+                        <div class="report-list">
+                            ${reports.map(report => `
+                                <div class="report-item">
+                                    <div class="report-info">
+                                        <span class="report-icon">📊</span>
+                                        <div class="report-details">
+                                            <div class="report-name">${report.title || report.report_id}</div>
+                                            <div class="report-meta">${report.created_at || ''}</div>
+                                        </div>
+                                    </div>
+                                    <div class="report-actions">
+                                        <button class="btn btn-primary" onclick="viewAdminReport('${report.report_id}')">查看</button>
+                                        <button class="btn btn-danger" onclick="deleteAdminReport('${report.report_id}')">删除</button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                }
+
+                document.getElementById('adminReportModal').style.display = 'flex';
+            } catch (error) {
+                alert('获取报告列表失败: ' + error.message);
+            }
+        }
+
+        async function viewAdminReport(reportId) {
+            try {
+                const response = await fetch(`/api/history/reports/${reportId}`, {
+                    headers: {
+                        'X-User-Id': ADMIN_USER_ID,
+                        'X-Username': ADMIN_USERNAME
+                    }
+                });
+                const result = await response.json();
+                
+                if (result.code !== 0) {
+                    alert('获取报告失败: ' + result.message);
+                    return;
+                }
+
+                alert(JSON.stringify(result.data, null, 2));
+            } catch (error) {
+                alert('获取报告失败: ' + error.message);
+            }
+        }
+
+        async function deleteAdminReport(reportId) {
+            if (!confirm(`确定要删除报告 ${reportId} 吗？`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/history/reports/${reportId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'X-User-Id': ADMIN_USER_ID,
+                        'X-Username': ADMIN_USERNAME
+                    }
+                });
+                const result = await response.json();
+                
+                if (result.code === 0) {
+                    alert('删除成功');
+                    showAdminReportList();
+                } else {
+                    alert('删除失败: ' + result.message);
+                }
+            } catch (error) {
+                alert('删除失败: ' + error.message);
+            }
+        }
+
+        async function showActionLogs() {
+            await loadActionTypes();
+            document.getElementById('actionLogModal').style.display = 'flex';
+            await queryActionLogs();
+        }
+
+        async function loadActionTypes() {
+            try {
+                const response = await fetch('/api/history/actions/types');
+                const result = await response.json();
+                
+                if (result.code === 0) {
+                    const select = document.getElementById('logActionType');
+                    select.innerHTML = '<option value="">全部类型</option>';
+                    for (const type of result.data.types) {
+                        const option = document.createElement('option');
+                        option.value = type;
+                        option.textContent = `${type} - ${result.data.description[type] || ''}`;
+                        select.appendChild(option);
+                    }
+                }
+            } catch (error) {
+                console.error('加载操作类型失败:', error);
+            }
+        }
+
+        async function queryActionLogs() {
+            try {
+                const startTime = document.getElementById('logStartTime').value;
+                const endTime = document.getElementById('logEndTime').value;
+                const actionType = document.getElementById('logActionType').value;
+
+                const response = await fetch('/api/history/actions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-User-Id': ADMIN_USER_ID,
+                        'X-Username': ADMIN_USERNAME
+                    },
+                    body: JSON.stringify({
+                        start_time: startTime || undefined,
+                        end_time: endTime || undefined,
+                        action_type: actionType || undefined,
+                        limit: 50,
+                        offset: 0
+                    })
+                });
+                const result = await response.json();
+                
+                if (result.code !== 0) {
+                    alert('查询日志失败: ' + result.message);
+                    return;
+                }
+
+                const container = document.getElementById('actionLogList');
+                const records = result.data.records;
+
+                if (records.length === 0) {
+                    container.innerHTML = '<div class="empty-state"><div class="empty-icon">📝</div><div>暂无操作记录</div></div>';
+                } else {
+                    container.innerHTML = `
+                        <div style="margin-bottom: 12px; color: var(--apple-gray); font-size: 0.875rem;">
+                            共 ${result.data.total} 条记录，显示前 ${records.length} 条
+                        </div>
+                        <div class="report-list">
+                            ${records.map(record => `
+                                <div class="report-item">
+                                    <div class="report-info">
+                                        <span class="report-icon">${getActionIcon(record.action_type)}</span>
+                                        <div class="report-details">
+                                            <div class="report-name">${record.action_name}</div>
+                                            <div class="report-meta">${record.action_type} · ${record.timestamp}</div>
+                                        </div>
+                                    </div>
+                                    <div class="report-actions">
+                                        <button class="btn btn-secondary" onclick="viewActionLog('${record.action_id}')">详情</button>
+                                        <button class="btn btn-danger" onclick="deleteActionLog('${record.action_id}')">删除</button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                alert('查询日志失败: ' + error.message);
+            }
+        }
+
+        function getActionIcon(actionType) {
+            const icons = {
+                'page_view': '📄',
+                'button_click': '🔘',
+                'api_request': '🔌',
+                'file_upload': '📤',
+                'file_download': '📥',
+                'report_view': '📊',
+                'task_start': '▶️',
+                'task_complete': '✅',
+                'task_failed': '❌',
+                'user_login': '🔐',
+                'user_logout': '🔓'
+            };
+            return icons[actionType] || '📝';
+        }
+
+        async function viewActionLog(actionId) {
+            try {
+                const response = await fetch(`/api/history/actions/${actionId}`, {
+                    headers: {
+                        'X-User-Id': ADMIN_USER_ID,
+                        'X-Username': ADMIN_USERNAME
+                    }
+                });
+                const result = await response.json();
+                
+                if (result.code !== 0) {
+                    alert('获取日志失败: ' + result.message);
+                    return;
+                }
+
+                alert(JSON.stringify(result.data, null, 2));
+            } catch (error) {
+                alert('获取日志失败: ' + error.message);
+            }
+        }
+
+        async function deleteActionLog(actionId) {
+            if (!confirm(`确定要删除操作记录 ${actionId} 吗？`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/history/actions/${actionId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'X-User-Id': ADMIN_USER_ID,
+                        'X-Username': ADMIN_USERNAME
+                    }
+                });
+                const result = await response.json();
+                
+                if (result.code === 0) {
+                    alert('删除成功');
+                    queryActionLogs();
+                } else {
+                    alert('删除失败: ' + result.message);
+                }
+            } catch (error) {
+                alert('删除失败: ' + error.message);
+            }
+        }
+
+        async function showActionTypes() {
+            try {
+                const response = await fetch('/api/history/actions/types');
+                const result = await response.json();
+                
+                if (result.code !== 0) {
+                    alert('获取操作类型失败: ' + result.message);
+                    return;
+                }
+
+                let typesInfo = '操作类型列表:\n\n';
+                for (const type of result.data.types) {
+                    typesInfo += `${type}: ${result.data.description[type] || '未定义'}\n`;
+                }
+                
+                alert(typesInfo);
+            } catch (error) {
+                alert('获取操作类型失败: ' + error.message);
+            }
+        }
+
+        async function showActionCount() {
+            try {
+                const response = await fetch('/api/history/actions/count', {
+                    headers: {
+                        'X-User-Id': ADMIN_USER_ID,
+                        'X-Username': ADMIN_USERNAME
+                    }
+                });
+                const result = await response.json();
+                
+                if (result.code !== 0) {
+                    alert('获取统计失败: ' + result.message);
+                    return;
+                }
+
+                alert(`操作记录总数: ${result.data.count} 条`);
+            } catch (error) {
+                alert('获取统计失败: ' + error.message);
+            }
+        }
+
+        function closeAdminModal() {
+            document.getElementById('adminReportModal').style.display = 'none';
+            document.getElementById('actionLogModal').style.display = 'none';
+        }
+
+        init();
+    </script>
+</body>
+</html>

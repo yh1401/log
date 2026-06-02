@@ -1,0 +1,641 @@
+{
+  "info": {
+    "_postman_id": "history-records-api-collection",
+    "name": "历史记录接口 - 管理员认证",
+    "description": "Log Analyzer 历史记录模块 API 接口集合，所有接口仅管理员用户 useradmin 可访问",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variables": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "admin_user_id",
+      "value": "admin001",
+      "type": "string"
+    },
+    {
+      "key": "admin_username",
+      "value": "useradmin",
+      "type": "string"
+    },
+    {
+      "key": "normal_user_id",
+      "value": "user001",
+      "type": "string"
+    },
+    {
+      "key": "normal_username",
+      "value": "normaluser",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "=== 认证测试 ===",
+      "item": [
+        {
+          "name": "[成功] 管理员访问历史报告列表",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/reports",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "reports"]
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"获取成功\",\n  \"data\": {\n    \"reports\": [],\n    \"total\": 0,\n    \"limit\": 100,\n    \"offset\": 0\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "[失败] 非管理员访问历史报告列表",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{normal_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{normal_username}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/reports",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "reports"]
+            }
+          },
+          "response": [
+            {
+              "name": "拒绝访问响应",
+              "originalRequest": {},
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 403,\n  \"message\": \"用户 normaluser 不是管理员，无权访问此接口\",\n  \"data\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "[失败] 未提供用户标识",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/history/reports",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "reports"]
+            }
+          },
+          "response": [
+            {
+              "name": "未授权响应",
+              "originalRequest": {},
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 403,\n  \"message\": \"未提供用户标识\",\n  \"data\": null\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "=== 历史报告 CRUD ===",
+      "item": [
+        {
+          "name": "创建历史报告",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/reports",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "reports"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"系统异常分析报告\",\n  \"file_name\": \"error.log\",\n  \"file_type\": \"log\",\n  \"summary\": \"分析了系统错误日志\",\n  \"statistics\": {\"error_count\": 10, \"warning_count\": 25},\n  \"analysis\": {},\n  \"files\": [],\n  \"tags\": [\"error\", \"analysis\"],\n  \"metadata\": {}\n}"
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"创建成功\",\n  \"data\": {\n    \"report_id\": \"rpt_20260602_xxx\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "获取历史报告列表",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/reports?limit=10&offset=0&keyword=error",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "reports"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "type": "text"
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "type": "text"
+                },
+                {
+                  "key": "keyword",
+                  "value": "error",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"获取成功\",\n  \"data\": {\n    \"reports\": [],\n    \"total\": 0,\n    \"limit\": 10,\n    \"offset\": 0\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "获取单个报告详情",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/reports/{report_id}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "reports", "{report_id}"]
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"获取成功\",\n  \"data\": {\n    \"report_id\": \"rpt_xxx\",\n    \"title\": \"报告标题\",\n    \"summary\": \"...\",\n    \"created_at\": \"2026-06-02T10:00:00\"\n  }\n}"
+            },
+            {
+              "name": "报告不存在",
+              "originalRequest": {},
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 1,\n  \"message\": \"报告不存在\",\n  \"data\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "更新历史报告",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/reports/{report_id}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "reports", "{report_id}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"更新后的标题\",\n  \"summary\": \"更新后的摘要\",\n  \"tags\": [\"updated\"]\n}"
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"更新成功\",\n  \"data\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "删除历史报告",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/reports/{report_id}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "reports", "{report_id}"]
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"删除成功\",\n  \"data\": null\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "=== 用户操作历史记录 ===",
+      "item": [
+        {
+          "name": "查询操作历史记录",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/actions",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "actions"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start_time\": \"2026-06-01T00:00:00\",\n  \"end_time\": \"2026-06-30T23:59:59\",\n  \"action_type\": \"api_request\",\n  \"limit\": 50,\n  \"offset\": 0\n}"
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"获取成功\",\n  \"data\": {\n    \"records\": [],\n    \"total\": 0,\n    \"limit\": 50,\n    \"offset\": 0\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "获取单条操作记录",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/actions/{action_id}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "actions", "{action_id}"]
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"获取成功\",\n  \"data\": {\n    \"action_id\": \"act_xxx\",\n    \"user_id\": \"admin001\",\n    \"action_type\": \"api_request\",\n    \"action_name\": \"POST /api/process\",\n    \"timestamp\": \"2026-06-02T10:00:00\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "删除单条操作记录",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/actions/{action_id}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "actions", "{action_id}"]
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"删除成功\",\n  \"data\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "清理操作记录",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/actions/cleanup?before_time=2026-01-01T00:00:00",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "actions", "cleanup"],
+              "query": [
+                {
+                  "key": "before_time",
+                  "value": "2026-01-01T00:00:00",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"清理成功\",\n  \"data\": {\n    \"deleted_count\": 0\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "统计操作记录数量",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{admin_user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Username",
+                "value": "{{admin_username}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/history/actions/count",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "actions", "count"]
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"获取成功\",\n  \"data\": {\n    \"count\": 0\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "获取操作类型列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/history/actions/types",
+              "host": ["{{base_url}}"],
+              "path": ["api", "history", "actions", "types"]
+            }
+          },
+          "response": [
+            {
+              "name": "成功响应",
+              "originalRequest": {},
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"code\": 0,\n  \"message\": \"获取成功\",\n  \"data\": {\n    \"types\": [\"page_view\", \"button_click\", \"api_request\"],\n    \"description\": {\n      \"page_view\": \"页面访问\"\n    }\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

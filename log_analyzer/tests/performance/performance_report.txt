@@ -1,0 +1,42 @@
+================================================================================
+          Log Analyzer Performance Test Report
+================================================================================
+Generated: 2026-06-01 16:08:39
+================================================================================
+
+📊 Test Summary
+----------------------------------------
+Total Tests: 1
+Successful: 1
+Failed: 0
+Total Duration: 158.78s
+Average Duration: 158.78s
+
+📈 Detailed Results
+----------------------------------------
+
+Test #1: /Users/a666/Documents/trae_projects/log/log_analyzer/uploads/error.2026-05-26.48.log
+  File Size: 100.02 MB
+  Status: ✅ Success
+  Duration: 158.78s
+  Lines Processed: 1,114,360
+  Chunks Processed: 112
+  Errors Found: 30,878
+  Performance Metrics:
+    - Total Time: 158.58s
+    - Parse Time: 0.14s
+    - Parsing Time: 2.01s
+    - LLM Time: 156.20s
+    - Chunks/Second: 0.71
+    - Lines/Second: 7027.19
+
+================================================================================
+             Performance Comparison (Expected vs Optimized)
+================================================================================
+
+
+/Users/a666/Documents/trae_projects/log/log_analyzer/uploads/error.2026-05-26.48.log (100.02 MB):
+  Expected (Original): 78.01s
+  Actual (Optimized): 158.78s
+  Speedup: 0.49x faster
+  Lines/Second: 7018

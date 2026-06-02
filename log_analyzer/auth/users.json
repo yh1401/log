@@ -1,0 +1,75 @@
+{
+  "96e76b260a0b7e4d": {
+    "user_id": "96e76b260a0b7e4d",
+    "username": "testuser",
+    "password_hash": "f7b9f3a4bff1db4140339bc1f6f3c9a3c59a076782b09cae7dabd3f6a82380d3f21c26b7585ea76df3435414a63fe8be",
+    "created_at": "2026-06-02T00:23:04.499172",
+    "is_active": true,
+    "last_login": "2026-06-02T00:23:11.747842"
+  },
+  "user_001": {
+    "user_id": "user_001",
+    "username": "å¼ ä¸",
+    "created_at": "2026-06-02T00:39:30.993671"
+  },
+  "user_002": {
+    "user_id": "user_002",
+    "username": "默认用户",
+    "created_at": "2026-06-02T00:39:54.846512"
+  },
+  "alice": {
+    "user_id": "alice",
+    "username": "默认用户",
+    "created_at": "2026-06-02T00:42:17.661604"
+  },
+  "bob": {
+    "user_id": "bob",
+    "username": "默认用户",
+    "created_at": "2026-06-02T00:42:18.201958"
+  },
+  "test_user": {
+    "user_id": "test_user",
+    "username": "默认用户",
+    "created_at": "2026-06-02T00:51:49.293590"
+  },
+  "alice_test123": {
+    "user_id": "alice_test123",
+    "username": "默认用户",
+    "created_at": "2026-06-02T00:57:02.972144"
+  },
+  "bob_test456": {
+    "user_id": "bob_test456",
+    "username": "默认用户",
+    "created_at": "2026-06-02T00:57:02.998825"
+  },
+  "default_user": {
+    "user_id": "default_user",
+    "username": "默认用户",
+    "created_at": "2026-06-02T01:43:22.765674"
+  },
+  "test_restart": {
+    "user_id": "test_restart",
+    "username": "默认用户",
+    "created_at": "2026-06-02T01:44:14.263466"
+  },
+  "hanmeimei": {
+    "user_id": "hanmeimei",
+    "username": "hanmeimei",
+    "created_at": "2026-06-02T02:01:37.987182"
+  },
+  "admin001": {
+    "user_id": "admin001",
+    "username": "useradmin",
+    "created_at": "2026-06-02T12:20:55.874077"
+  },
+  "user001": {
+    "user_id": "user001",
+    "username": "normaluser",
+    "created_at": "2026-06-02T12:20:55.889666"
+  },
+  "test-user": {
+    "user_id": "test-user",
+    "username": "Test User",
+    "created_at": "2026-06-02T17:04:40.770831"
+  }
+}

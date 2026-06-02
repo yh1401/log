@@ -1,0 +1,40 @@
+[
+  {
+    "action_id": "act_20260602102925_a9d61e83",
+    "user_id": "test_user",
+    "action_type": "api_request",
+    "action_name": "POST /api/process",
+    "resource": "/api/process",
+    "details": {
+      "method": "POST",
+      "status_code": 200
+    },
+    "timestamp": "2026-06-02T10:29:25.437178",
+    "duration_ms": 1500,
+    "status": "success"
+  },
+  {
+    "action_id": "act_20260602102925_27ceb260",
+    "user_id": "test_user",
+    "action_type": "page_view",
+    "action_name": "访问页面: /api/reports",
+    "resource": "/api/reports",
+    "details": {},
+    "timestamp": "2026-06-02T10:29:25.436397",
+    "duration_ms": 0,
+    "status": "success"
+  },
+  {
+    "action_id": "act_20260602102925_ff28df12",
+    "user_id": "test_user",
+    "action_type": "page_view",
+    "action_name": "访问首页",
+    "resource": "/",
+    "details": {
+      "referrer": "direct"
+    },
+    "timestamp": "2026-06-02T10:29:25.435566",
+    "duration_ms": 0,
+    "status": "success"
+  }
+]
