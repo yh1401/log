@@ -67,7 +67,7 @@ GET  /api/history/actions/count  # 操作统计
 
 ```http
 X-User-Id: admin001        # 用户ID（必填）
-X-Username: admin          # 用户名（可选）
+X-User_Name: admin          # 用户名（可选）
 Content-Type: application/json  # 或 multipart/form-data
 ```
 

@@ -78,7 +78,7 @@
 | 请求头 | 必填 | 说明 |
 |--------|------|------|
 | `X-User-Id` | 否 | 用户业务ID（缺失则使用 `default_user`），用于身份识别和数据隔离 |
-| `X-Username` | 否 | 用户显示名称（可选，未提供时自动使用 user_id），用于界面显示 |
+| `X-User_Name` | 否 | 用户显示名称（可选，未提供时自动使用 user_id），用于界面显示 |
 | `Content-Type` | 是 | `application/json` 或 `multipart/form-data` |
 
 ### 1.4 统一响应格式
@@ -120,7 +120,8 @@
 └────┬────┘                              └────┬────┘                          └────┬────┘
      │                                         │                                   │
      │  1. 任意API请求                          │                                   │
-     │  Header: X-User-Id: user_001            │                                   │
+     │  Header: X-User-Id: user_001
+X-User_Name: user_001            │                                   │
      │────────────────────────────────────────>│                                   │
      │                                         │  2. 提取 X-User-Id                │
      │                                         │     (无值则用 default_user)       │
@@ -156,6 +157,7 @@
 ```http
 POST /api/upload
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: multipart/form-data
 
 file: <文件>
@@ -202,6 +204,7 @@ file: <文件>
 ```http
 POST /api/list-dir
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: application/json
 
 {
@@ -318,6 +321,7 @@ Content-Type: application/json
 ```http
 GET /api/download/{file_path}
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **路径参数**
@@ -349,6 +353,7 @@ X-User-Id: user_001
 ```http
 POST /api/process
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: application/json
 
 {
@@ -400,6 +405,7 @@ Content-Type: application/json
 ```http
 POST /api/process-from-path
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: application/json
 
 {
@@ -457,6 +463,7 @@ Content-Type: application/json
 ```http
 GET /api/task/{task_id}
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **路径参数**
@@ -513,6 +520,7 @@ X-User-Id: user_001
 ```http
 GET /api/reports
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **成功响应**
@@ -543,6 +551,7 @@ X-User-Id: user_001
 ```http
 GET /api/report/download/{report_name}
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **路径参数**
@@ -570,6 +579,7 @@ X-User-Id: user_001
 ```http
 DELETE /api/report/{report_name}
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **路径参数**
@@ -597,6 +607,7 @@ X-User-Id: user_001
 ```http
 POST /api/history/reports
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: application/json
 
 {
@@ -641,6 +652,7 @@ Content-Type: application/json
 ```http
 GET /api/history/reports?page=1&page_size=20
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **查询参数**
@@ -682,6 +694,7 @@ X-User-Id: user_001
 ```http
 GET /api/history/reports/{report_id}
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **路径参数**
@@ -716,6 +729,7 @@ X-User-Id: user_001
 ```http
 PUT /api/history/reports/{report_id}
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: application/json
 
 {
@@ -753,6 +767,7 @@ Content-Type: application/json
 ```http
 GET /api/history/reports/search?keyword=error&start_date=2026-06-01&end_date=2026-06-30&page=1&page_size=20
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **查询参数**
@@ -785,6 +800,7 @@ X-User-Id: user_001
 ```http
 DELETE /api/history/reports/{report_id}
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **路径参数**
@@ -812,6 +828,7 @@ X-User-Id: user_001
 ```http
 POST /api/backup/create
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: application/json
 
 {
@@ -850,6 +867,7 @@ Content-Type: application/json
 ```http
 POST /api/backup/export
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: application/json
 
 {
@@ -885,6 +903,7 @@ Content-Type: application/json
 ```http
 POST /api/backup/import
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: multipart/form-data
 
 file: <backup.zip>
@@ -914,6 +933,7 @@ file: <backup.zip>
 ```http
 POST /api/history/actions
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: application/json
 
 {
@@ -954,6 +974,7 @@ Content-Type: application/json
 ```http
 GET /api/history/actions?page=1&page_size=20&action_type=upload&start_date=2026-06-01
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **查询参数**
@@ -998,6 +1019,7 @@ X-User-Id: user_001
 ```http
 GET /api/history/actions/types
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **成功响应**
@@ -1024,6 +1046,7 @@ X-User-Id: user_001
 ```http
 GET /api/history/actions/count?start_date=2026-06-01&end_date=2026-06-30
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **查询参数**
@@ -1063,6 +1086,7 @@ X-User-Id: user_001
 ```http
 GET /api/history/actions/{action_id}
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **路径参数**
@@ -1093,6 +1117,7 @@ X-User-Id: user_001
 ```http
 DELETE /api/history/actions/{action_id}
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **路径参数**
@@ -1116,6 +1141,7 @@ X-User-Id: user_001
 ```http
 DELETE /api/history/actions/cleanup
 X-User-Id: user_001
+X-User_Name: user_001
 Content-Type: application/json
 
 {
@@ -1176,6 +1202,7 @@ GET /api/health
 ```http
 GET /api/system/config
 X-User-Id: user_001
+X-User_Name: user_001
 ```
 
 **成功响应**
@@ -1286,6 +1313,7 @@ users/
 ```bash
 curl -X POST http://localhost:8000/api/upload \
   -H "X-User-Id: user_001" \
+  -H "X-User_Name: user_001" \
   -F "file=@error.log"
 ```
 
@@ -1293,6 +1321,7 @@ curl -X POST http://localhost:8000/api/upload \
 ```bash
 curl -X POST http://localhost:8000/api/process \
   -H "X-User-Id: user_001" \
+  -H "X-User_Name: user_001" \
   -H "Content-Type: application/json" \
   -d '{"file_path": "/users/user_001/uploads/error.log", "use_llm": false}'
 ```
@@ -1300,13 +1329,15 @@ curl -X POST http://localhost:8000/api/process \
 **获取任务状态**
 ```bash
 curl -X GET http://localhost:8000/api/task/user_001_20260601_100000_123456 \
-  -H "X-User-Id: user_001"
+  -H "X-User-Id: user_001" \
+  -H "X-User_Name: user_001"
 ```
 
 **获取报告列表**
 ```bash
 curl -X GET http://localhost:8000/api/reports \
-  -H "X-User-Id: user_001"
+  -H "X-User-Id: user_001" \
+  -H "X-User_Name: user_001"
 ```
 
 ### 13.2 使用 JavaScript 调用
@@ -1321,6 +1352,7 @@ async function apiRequest(endpoint, method = 'GET', data = null, headers = {}) {
     
     const defaultHeaders = {
         'X-User-Id': 'user_001',
+        'X-User_Name': 'user_001',
         'Content-Type': 'application/json'
     };
     
@@ -1344,7 +1376,7 @@ async function uploadFile(file) {
     
     const response = await fetch(`${BASE_URL}/api/upload`, {
         method: 'POST',
-        headers: { 'X-User-Id': 'user_001' },
+        headers: { 'X-User-Id': 'user_001', 'X-User_Name': 'user_001' },
         body: formData
     });
     
@@ -1389,14 +1421,14 @@ async function pollTask(taskId) {
 import requests
 
 BASE_URL = 'http://localhost:8000'
-HEADERS = {'X-User-Id': 'user_001'}
+HEADERS = {'X-User-Id': 'user_001', 'X-User_Name': 'user_001'}
 
 # 上传文件
 def upload_file(file_path):
     with open(file_path, 'rb') as f:
         response = requests.post(
             f'{BASE_URL}/api/upload',
-            headers={'X-User-Id': 'user_001'},
+            headers={'X-User-Id': 'user_001', 'X-User_Name': 'user_001'},
             files={'file': f}
         )
     return response.json()

@@ -40,7 +40,7 @@ def test_user_authentication():
         user2 = "bob_456"
 
         # 用户1
-        response = requests.get(f"{API_BASE}/api/auth/current", headers={"X-User-Id": user1, "X-Username": "Alice"}, timeout=5)
+        response = requests.get(f"{API_BASE}/api/auth/current", headers={"X-User-Id": user1, "X-User_Name": "Alice"}, timeout=5)
         print(f"  用户 Alice (X-User-Id: {user1}):")
         print(f"    状态码: {response.status_code}")
         print(f"    响应: {response.json()}")

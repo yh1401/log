@@ -302,7 +302,7 @@ log_analyzer/
 | 请求头 | 必填 | 说明 | 示例 |
 |--------|------|------|------|
 | `X-User-Id` | 否 | 用户ID，未填则使用默认值 | `admin001` |
-| `X-Username` | 否 | 用户名，用于显示 | `admin` |
+| `X-User_Name` | 否 | 用户名，用于显示 | `admin` |
 | `Content-Type` | 是 | application/json或multipart/form-data | `application/json` |
 
 ### 5.2 统一响应格式

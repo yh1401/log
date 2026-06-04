@@ -100,11 +100,11 @@ from fastapi import HTTPException, Header
 
 async def require_admin(
     x_user_id: str = Header(None, alias="X-User-Id"),
-    x_username: str = Header(None, alias="X-Username")
+    x_username: str = Header(None, alias="X-User_Name")
 ) -> Dict[str, Any]:
     """FastAPI依赖：验证用户是否为管理员
     
-    - 通过 X-User-Id 和 X-Username 头识别用户身份
+    - 通过 X-User-Id 和 X-User_Name 头识别用户身份
     - 验证用户名为 "useradmin"
     - 非管理员用户返回 HTTP 403 Forbidden
     """

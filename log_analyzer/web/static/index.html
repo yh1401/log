@@ -2614,7 +2614,7 @@
         async function apiRequest(url, options = {}) {
             const headers = {
                 'X-User-Id': getCurrentUserId(),
-                'X-Username': getCurrentUserName() || '',
+                'X-User_Name': getCurrentUserName() || '',
                 ...options.headers
             };
             
@@ -2878,7 +2878,7 @@
                 const response = await fetch(`/api/history/actions/${actionId}`, {
                     headers: {
                         'X-User-Id': ADMIN_USER_ID,
-                        'X-Username': ADMIN_USERNAME
+                        'X-User_Name': ADMIN_USERNAME
                     }
                 });
                 const result = await response.json();

@@ -212,7 +212,7 @@ def get_user_checkpoints_dir(user_id: str) -> Path:
 
 async def get_current_user(
     x_user_id: str = Header(None, alias="X-User-Id"),
-    x_username: str = Header(None, alias="X-Username")
+    x_username: str = Header(None, alias="X-User_Name")
 ) -> Dict[str, Any]:
     """从请求头获取当前用户标识（无鉴权）
 

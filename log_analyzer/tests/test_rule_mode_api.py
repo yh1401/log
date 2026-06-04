@@ -20,7 +20,7 @@ USERNAME = "规则模式测试用户"
 HEADERS = {
     "Content-Type": "application/json",
     "X-User-Id": USER_ID,
-    "X-Username": USERNAME
+    "X-User_Name": USERNAME
 }
 
 def print_section(title):
@@ -67,7 +67,7 @@ def test_process_with_llm():
         }
         upload_response = requests.post(f"{API_BASE}/api/upload", files=upload_data, headers={
             "X-User-Id": USER_ID,
-            "X-Username": USERNAME
+            "X-User_Name": USERNAME
         })
         print(f"上传响应: {upload_response.json()}")
 
@@ -147,7 +147,7 @@ def test_process_with_rule_mode():
         }
         upload_response = requests.post(f"{API_BASE}/api/upload", files=upload_data, headers={
             "X-User-Id": USER_ID,
-            "X-Username": USERNAME
+            "X-User_Name": USERNAME
         })
         print(f"上传响应: {upload_response.json()}")
 
@@ -227,7 +227,7 @@ def test_performance_comparison():
         }
         upload_response = requests.post(f"{API_BASE}/api/upload", files=upload_data, headers={
             "X-User-Id": USER_ID,
-            "X-Username": USERNAME
+            "X-User_Name": USERNAME
         })
         file_path = upload_response.json()['data']['file_path']
 
