@@ -1077,29 +1077,84 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                 else:
                     # 更新状态：开始文件解析（阶段1：20%-40%）
                     task_info["message"] = f"正在处理文件 {idx + 1}/{total_files}: {file_name}"
-                    task_info["progress"] = 20 + (idx / total_files) * 20
+                    task_info["progress"] = 20 + (idx / total_files) * 10
                     
                     with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
                         json.dump(task_info, f, indent=2)
                     
                     logger.info(f"[Task {task_id}] 开始解析文件: {file_path}")
                     
-                    result = await processor.process_file_async(file_path=file_path, resume=True, force_restart=True)
+                    # AI分析进度递增任务相关变量
+                    ai_progress_task = None
+                    ai_current_progress = 40
+                    ai_progress_lock = asyncio.Lock()
+                    
+                    # AI分析进度递增协程
+                    async def ai_progress_incrementer():
+                        nonlocal ai_current_progress
+                        ai_current_progress = 40  # AI分析阶段起始进度
+                        while True:
+                            await asyncio.sleep(1)  # 每秒递增一次
+                            async with ai_progress_lock:
+                                # 从40%递增到86%
+                                if ai_current_progress < 86:
+                                    ai_current_progress += 1  # 每秒增加1%
+                                    # 避免超过86%
+                                    if ai_current_progress > 86:
+                                        ai_current_progress = 86
+                                    task_info["progress"] = ai_current_progress
+                                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                                        json.dump(task_info, f, indent=2)
+                                else:
+                                    # 已经达到86%，保持不变
+                                    break
+                    
+                    # 定义进度回调函数
+                    async def progress_callback(event_type):
+                        nonlocal ai_progress_task
+                        if event_type == "ai_analysis_start":
+                            # AI分析开始，更新状态（阶段2：40%-86%）
+                            task_info["message"] = f"AI正在分析文件 {idx + 1}/{total_files}: {file_name}"
+                            task_info["progress"] = 40
+                            
+                            with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                                json.dump(task_info, f, indent=2)
+                            
+                            logger.info(f"[Task {task_id}] 开始AI分析")
+                            
+                            # 启动进度递增任务
+                            ai_progress_task = asyncio.create_task(ai_progress_incrementer())
+                    
+                    result = await processor.process_file_async(
+                        file_path=file_path, 
+                        resume=True, 
+                        force_restart=True,
+                        progress_callback=progress_callback
+                    )
                     all_results.append(result)
                     
-                    # 更新状态：AI分析完成（阶段2：40%-70%）
-                    task_info["message"] = f"AI分析完成 {idx + 1}/{total_files}: {file_name}"
-                    task_info["progress"] = 40 + (idx / total_files) * 30
+                    # 停止进度递增任务
+                    if ai_progress_task:
+                        ai_progress_task.cancel()
+                        try:
+                            await ai_progress_task
+                        except asyncio.CancelledError:
+                            pass
                     
-                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
-                        json.dump(task_info, f, indent=2)
+                    # 更新状态：AI分析完成（阶段2结束：86%）
+                    async with ai_progress_lock:
+                        task_info["message"] = f"AI分析完成 {idx + 1}/{total_files}: {file_name}"
+                        task_info["progress"] = 86
+                        
+                        with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                            json.dump(task_info, f, indent=2)
                     
                     logger.info(f"[Task {task_id}] 文件处理完成，状态: {result.status}")
 
                     if result.status == "completed":
-                        # 更新状态：生成报告（阶段3：70%-90%）
+                        # 更新状态：生成报告（阶段3：86%-95%）
                         task_info["message"] = f"正在生成报告 {idx + 1}/{total_files}: {file_name}"
-                        task_info["progress"] = 70 + (idx / total_files) * 20
+                        task_info["progress"] = 90 + (idx / total_files) * 5
                         
                         with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
                             json.dump(task_info, f, indent=2)

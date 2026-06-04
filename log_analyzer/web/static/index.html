@@ -2542,7 +2542,7 @@
 
         function inferStageFromMessage(message) {
             if (!message) return 1;
-            if (message.includes('处理文件') || message.includes('解析') || message.includes('统计') || message.includes('加载') || message.includes('准备')) return 1;
+            if (message.includes('处理文件') || message.includes('解析') || message.includes('统计') || message.includes('加载') || message.includes('准备') && !message.includes('AI')) return 1;
             if (message.includes('LLM') || message.includes('AI分析') || message.includes('AI正在') || message.includes('AI分析完成')) return 2;
             if (message.includes('报告') || message.includes('保存') || message.includes('生成')) return 3;
             return 1;

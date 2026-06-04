@@ -247,7 +247,8 @@ class ChunkProcessor:
         self,
         file_path: str,
         resume: bool = True,
-        force_restart: bool = False
+        force_restart: bool = False,
+        progress_callback: callable = None
     ) -> ProcessingResult:
         start_total = time.time()
         logger.info("=" * 80)
@@ -364,6 +365,10 @@ class ChunkProcessor:
             
             parsing_time = time.time() - parsing_start
             logger.info(f"[Process File] 文件解析完成，共 {len(all_chunks)} 个块 (耗时: {parsing_time:.2f}s)")
+
+            # 文件解析完成，准备开始AI分析
+            if progress_callback:
+                await progress_callback("ai_analysis_start")
 
             llm_start = time.time()
             
