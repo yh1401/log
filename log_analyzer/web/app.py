@@ -860,6 +860,13 @@ async def process_log_files(
                 if file_path.lower().endswith('.pcap'):
                     logger.info(f"[Task {task_id}] PCAP文件检测到，使用专用处理器...")
                     
+                    # 更新状态：开始解析PCAP文件
+                    task_info["message"] = f"正在解析PCAP文件 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = idx / total_files * 80 + 5
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
+                    
                     from log_analyzer.processor.pcap_processor import PCAPProcessor
                     
                     pcap_processor = PCAPProcessor(max_packets=1000)
@@ -869,6 +876,13 @@ async def process_log_files(
                     logger.info(f"  - 总数据包: {stats.total_packets}")
                     logger.info(f"  - TCP: {stats.tcp_packets}, UDP: {stats.udp_packets}")
                     logger.info(f"  - 错误: {stats.error_count}, 警告: {stats.warning_count}")
+                    
+                    # 更新状态：开始AI分析PCAP数据
+                    task_info["message"] = f"AI正在分析PCAP数据 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = idx / total_files * 80 + 10
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
                     
                     logger.info(f"[Task {task_id}] 准备调用LLM分析PCAP数据...")
                     analysis_prompt = pcap_processor.generate_analysis_prompt()
@@ -887,6 +901,13 @@ async def process_log_files(
                     else:
                         llm_result = f"LLM分析失败: {llm_response.error}"
                         logger.error(f"[Task {task_id}] LLM分析失败: {llm_response.error}")
+                    
+                    # 更新状态：生成PCAP报告
+                    task_info["message"] = f"正在生成PCAP报告 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = idx / total_files * 80 + 15
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
                     
                     report_data = {
                         "title": f"PCAP网络流量分析报告 - {file_name}",
@@ -1054,11 +1075,35 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                     continue
                     
                 else:
+                    # 更新状态：开始文件解析（阶段1：20%-40%）
+                    task_info["message"] = f"正在处理文件 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = 20 + (idx / total_files) * 20
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
+                    
+                    logger.info(f"[Task {task_id}] 开始解析文件: {file_path}")
+                    
                     result = await processor.process_file_async(file_path=file_path, resume=True, force_restart=True)
                     all_results.append(result)
+                    
+                    # 更新状态：AI分析完成（阶段2：40%-70%）
+                    task_info["message"] = f"AI分析完成 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = 40 + (idx / total_files) * 30
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
+                    
                     logger.info(f"[Task {task_id}] 文件处理完成，状态: {result.status}")
 
                     if result.status == "completed":
+                        # 更新状态：生成报告（阶段3：70%-90%）
+                        task_info["message"] = f"正在生成报告 {idx + 1}/{total_files}: {file_name}"
+                        task_info["progress"] = 70 + (idx / total_files) * 20
+                        
+                        with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                            json.dump(task_info, f, indent=2)
+                        
                         report = report_generator.generate_report(result)
                         saved_files = report_generator.save_report(report, format="html+md+pdf+word")
                         logger.info(f"[Task {task_id}] 报告已保存: {saved_files}")
@@ -1463,6 +1508,13 @@ async def process_files_from_path(
                 if file_path.lower().endswith('.pcap'):
                     task_logger.info(f"[Task {task_id}] PCAP文件检测到，使用专用处理器...")
                     
+                    # 更新状态：开始解析PCAP文件
+                    task_info["message"] = f"正在解析PCAP文件 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = idx / total_files * 80 + 5
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
+                    
                     from log_analyzer.processor.pcap_processor import PCAPProcessor
                     
                     pcap_processor = PCAPProcessor(max_packets=1000)
@@ -1472,6 +1524,13 @@ async def process_files_from_path(
                     task_logger.info(f"  - 总数据包: {stats.total_packets}")
                     task_logger.info(f"  - TCP: {stats.tcp_packets}, UDP: {stats.udp_packets}")
                     task_logger.info(f"  - 错误: {stats.error_count}, 警告: {stats.warning_count}")
+                    
+                    # 更新状态：开始AI分析PCAP数据
+                    task_info["message"] = f"AI正在分析PCAP数据 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = idx / total_files * 80 + 10
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
                     
                     task_logger.info(f"[Task {task_id}] 准备调用LLM分析PCAP数据...")
                     analysis_prompt = pcap_processor.generate_analysis_prompt()
@@ -1490,6 +1549,13 @@ async def process_files_from_path(
                     else:
                         llm_result = f"LLM分析失败: {llm_response.error}"
                         task_logger.error(f"[Task {task_id}] LLM分析失败: {llm_response.error}")
+                    
+                    # 更新状态：生成PCAP报告
+                    task_info["message"] = f"正在生成PCAP报告 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = idx / total_files * 80 + 15
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
                     
                     report_data = {
                         "title": f"PCAP网络流量分析报告 - {file_name}",
@@ -1541,6 +1607,13 @@ async def process_files_from_path(
                     processed_files += 1
                 
                 else:
+                    # 更新状态：开始解析文件
+                    task_info["message"] = f"正在解析文件 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = idx / total_files * 80 + 5
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
+                    
                     result = await processor.process_file_async(
                         file_path=file_path,
                         resume=True,
@@ -1548,9 +1621,23 @@ async def process_files_from_path(
                     )
                     all_results.append(result)
                     
+                    # 更新状态：开始AI分析
+                    task_info["message"] = f"AI正在分析文件 {idx + 1}/{total_files}: {file_name}"
+                    task_info["progress"] = idx / total_files * 80 + 10
+                    
+                    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                        json.dump(task_info, f, indent=2)
+                    
                     task_logger.info(f"[Task {task_id}] 文件处理完成: {file_name}, 状态: {result.status}")
                     
                     if result.status == "completed":
+                        # 更新状态：生成报告
+                        task_info["message"] = f"正在生成报告 {idx + 1}/{total_files}: {file_name}"
+                        task_info["progress"] = idx / total_files * 80 + 15
+                        
+                        with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                            json.dump(task_info, f, indent=2)
+                        
                         report = report_generator.generate_report(result)
                         saved_files = report_generator.save_report(report, format="html+md+pdf+word", prefix="report_path")
                         

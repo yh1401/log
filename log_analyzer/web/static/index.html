@@ -352,6 +352,7 @@
             text-align: center;
             position: relative;
             padding: 8px 0;
+            transition: all 0.3s ease;
         }
 
         .stage:not(:last-child)::after {
@@ -363,10 +364,15 @@
             height: 2px;
             background: var(--apple-border-color);
             z-index: 1;
+            transition: background 0.3s ease;
         }
 
         .stage.active:not(:last-child)::after {
             background: var(--apple-blue);
+        }
+
+        .stage.completed:not(:last-child)::after {
+            background: var(--apple-success);
         }
 
         .stage-icon {
@@ -388,11 +394,106 @@
             background: var(--apple-blue);
             color: white;
             transform: scale(1.1);
+            animation: pulse 1.5s ease-in-out infinite;
         }
 
         .stage.completed .stage-icon {
             background: var(--apple-success);
             color: white;
+            animation: none;
+        }
+
+        /* 文件处理阶段动画 */
+        .stage.active.processing .stage-icon {
+            background: var(--apple-blue);
+            animation: processing-pulse 1.5s ease-in-out infinite;
+        }
+
+        /* AI分析阶段动画 - Thinking效果 */
+        .stage.active.analyzing .stage-icon {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            animation: ai-thinking 2s ease-in-out infinite;
+            position: relative;
+        }
+
+        .stage.active.analyzing .stage-icon::before {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            right: -4px;
+            bottom: -4px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            z-index: -1;
+            animation: ai-ring 2s ease-in-out infinite;
+        }
+
+        .stage.active.analyzing .stage-icon::after {
+            content: '';
+            position: absolute;
+            top: -8px;
+            left: -8px;
+            right: -8px;
+            bottom: -8px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            z-index: -2;
+            animation: ai-ring 2s ease-in-out infinite 0.5s;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(0, 113, 227, 0.4);
+            }
+            50% {
+                box-shadow: 0 0 0 8px rgba(0, 113, 227, 0);
+            }
+        }
+
+        @keyframes processing-pulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(0, 113, 227, 0.4);
+                transform: scale(1.1);
+            }
+            50% {
+                box-shadow: 0 0 0 8px rgba(0, 113, 227, 0);
+                transform: scale(1.15);
+            }
+        }
+
+        @keyframes ai-thinking {
+            0%, 100% {
+                transform: scale(1) rotate(0deg);
+                box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.6);
+            }
+            20% {
+                transform: scale(1.05) rotate(3deg);
+            }
+            40% {
+                transform: scale(1) rotate(-2deg);
+            }
+            50% {
+                box-shadow: 0 0 0 6px rgba(102, 126, 234, 0);
+                transform: scale(1.05) rotate(0deg);
+            }
+            60% {
+                transform: scale(1) rotate(2deg);
+            }
+            80% {
+                transform: scale(1.05) rotate(-3deg);
+            }
+        }
+
+        @keyframes ai-ring {
+            0% {
+                transform: scale(1);
+                opacity: 0.8;
+            }
+            100% {
+                transform: scale(1.8);
+                opacity: 0;
+            }
         }
 
         .stage-label {
@@ -414,18 +515,68 @@
 
         .progress-bar {
             width: 100%;
-            height: 6px;
+            height: 8px;
             background: var(--apple-border-color);
-            border-radius: 3px;
+            border-radius: 4px;
             overflow: hidden;
             margin-bottom: 12px;
+            position: relative;
         }
 
         .progress-fill {
             height: 100%;
-            background: var(--apple-blue);
-            border-radius: 3px;
-            transition: width 0.3s ease;
+            background: linear-gradient(90deg, var(--apple-blue) 0%, #34c759 100%);
+            border-radius: 4px;
+            transition: width 0.5s ease-out;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% {
+                transform: translateX(-100%);
+            }
+            100% {
+                transform: translateX(100%);
+            }
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .progress-percentage {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--apple-blue);
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+        }
+
+        .progress-time {
+            font-size: 0.75rem;
+            color: var(--apple-gray);
+        }
+
+        .status-text {
+            font-size: 0.875rem;
+            color: var(--apple-dark-gray);
+            text-align: center;
+            padding: 8px 0;
+            min-height: 24px;
         }
 
         .status-text {
@@ -917,6 +1068,11 @@
                         </div>
                     </div>
 
+                    <div class="progress-info">
+                        <span class="progress-percentage" id="progressPercentage">0%</span>
+                        <span class="progress-time" id="progressTime">预计剩余时间计算中...</span>
+                    </div>
+                    
                     <div class="progress-bar">
                         <div class="progress-fill" id="progressFill"></div>
                     </div>
@@ -2241,12 +2397,22 @@
         function setStage(stageIndex, detail = '') {
             const stages = document.querySelectorAll('.stage');
             stages.forEach((stage, index) => {
+                // 移除所有阶段特定的动画类
+                stage.classList.remove('processing', 'analyzing');
+                
                 if (index < stageIndex) {
                     stage.classList.add('completed');
                     stage.classList.remove('active');
                 } else if (index === stageIndex) {
                     stage.classList.add('active');
                     stage.classList.remove('completed');
+                    
+                    // 根据阶段添加特定的动画类
+                    if (index === 1) {
+                        stage.classList.add('processing'); // 文件处理阶段
+                    } else if (index === 2) {
+                        stage.classList.add('analyzing'); // AI分析阶段
+                    }
                 } else {
                     stage.classList.remove('active', 'completed');
                 }
@@ -2348,11 +2514,13 @@
 
                 setStage(3, '报告生成完成');
                 document.getElementById('progressFill').style.width = '100%';
+                document.getElementById('progressPercentage').textContent = '100%';
+                document.getElementById('progressTime').textContent = '已完成';
                 document.getElementById('statusText').textContent = `分析完成！共处理 ${totalFiles} 个文件`;
 
                 document.querySelectorAll('.stage').forEach(stage => {
                     stage.classList.add('completed');
-                    stage.classList.remove('active');
+                    stage.classList.remove('active', 'processing', 'analyzing');
                 });
 
                 if (allReports.length > 0) {
@@ -2374,8 +2542,8 @@
 
         function inferStageFromMessage(message) {
             if (!message) return 1;
-            if (message.includes('解析') || message.includes('统计') || message.includes('加载') || message.includes('准备')) return 1;
-            if (message.includes('LLM') || message.includes('分析') || message.includes('AI')) return 2;
+            if (message.includes('处理文件') || message.includes('解析') || message.includes('统计') || message.includes('加载') || message.includes('准备')) return 1;
+            if (message.includes('LLM') || message.includes('AI分析') || message.includes('AI正在') || message.includes('AI分析完成')) return 2;
             if (message.includes('报告') || message.includes('保存') || message.includes('生成')) return 3;
             return 1;
         }
@@ -2386,6 +2554,9 @@
                 let pollDelay = 1000;
                 const baseDelay = 1000;
                 const maxDelay = 5000;
+                const startTime = Date.now();
+                let lastProgress = 0;
+                let lastTime = startTime;
 
                 const stop = () => {
                     if (taskPollInterval) {
@@ -2424,6 +2595,44 @@
                         const fileProgress = (task.progress || 0) / 100;
                         const totalProgress = (taskInfo.file_index + fileProgress) / taskInfo.total_files * 100;
                         document.getElementById('progressFill').style.width = totalProgress + '%';
+                        
+                        // 更新进度百分比显示
+                        document.getElementById('progressPercentage').textContent = 
+                            Math.round(totalProgress) + '%';
+
+                        // 计算预计剩余时间
+                        const currentTime = Date.now();
+                        const elapsedTime = (currentTime - startTime) / 1000; // 秒
+                        const progressDelta = totalProgress - lastProgress;
+                        const timeDelta = (currentTime - lastTime) / 1000; // 秒
+                        
+                        let estimatedTime = '计算中...';
+                        if (timeDelta > 0 && progressDelta > 0 && totalProgress > 0 && totalProgress < 100) {
+                            const progressRate = progressDelta / timeDelta; // 每秒进度百分比
+                            const remainingProgress = 100 - totalProgress;
+                            const remainingSeconds = Math.round(remainingProgress / progressRate);
+                            
+                            if (remainingSeconds < 60) {
+                                estimatedTime = `预计剩余 ${remainingSeconds} 秒`;
+                            } else if (remainingSeconds < 3600) {
+                                const minutes = Math.round(remainingSeconds / 60);
+                                estimatedTime = `预计剩余 ${minutes} 分钟`;
+                            } else {
+                                const hours = Math.floor(remainingSeconds / 3600);
+                                const minutes = Math.round((remainingSeconds % 3600) / 60);
+                                estimatedTime = `预计剩余 ${hours}小时${minutes}分钟`;
+                            }
+                        } else if (totalProgress >= 100) {
+                            estimatedTime = '即将完成...';
+                        }
+                        
+                        document.getElementById('progressTime').textContent = estimatedTime;
+                        
+                        // 更新进度追踪
+                        if (totalProgress > lastProgress) {
+                            lastProgress = totalProgress;
+                            lastTime = currentTime;
+                        }
 
                         const message = task.message || '';
                         const stageIndex = inferStageFromMessage(message);
@@ -2440,7 +2649,7 @@
                         saveActiveTask(updatedInfo);
 
                         document.getElementById('statusText').textContent =
-                            `监控任务 ${taskInfo.task_id}：${message || '处理中...'}`;
+                            `${message || '处理中...'}`;
 
                         if (task.status === 'completed') {
                             finishResolve(task);
