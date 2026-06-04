@@ -1,7 +1,7 @@
-# Log Analyzer API 接口文档 (v2.5.1 - 完整版本)
+# Log Analyzer API 接口文档 (v2.6.0 - 完整版本)
 
-> 版本: v2.5.1
-> 更新日期: 2026-06-04
+> 版本: v2.6.0
+> 更新日期: 2026-06-05
 > 基础URL: `http://localhost:8000`
 
 ---
@@ -20,8 +20,7 @@
    - [POST /api/list-dir - 服务器路径浏览](#32-服务器路径浏览单一接口)
    - [GET /api/download/{file_path} - 文件下载](#33-文件下载)
 4. [日志处理接口](#4-日志处理接口)
-   - [POST /api/process - 开始处理日志文件](#41-开始处理日志文件)
-   - [POST /api/process-from-path - 从服务器路径读取并处理](#42-从服务器路径读取并处理)
+   - [POST /api/process - 开始处理日志文件（统一接口）](#41-开始处理日志文件统一接口)
 5. [任务管理接口](#5-任务管理接口)
    - [GET /api/task/{task_id} - 获取任务状态](#51-获取任务状态)
 6. [报告接口](#6-报告接口)
@@ -172,6 +171,11 @@ file: <文件>
 **文件大小限制**
 - 单个文件最大：500 MB
 - ZIP压缩包解压后最大：1 GB
+
+**文件数量限制**
+> 系统自动管理存储空间，超出限制时自动清理旧文件：
+- 每个用户最多保留 **100 个上传文件**（超出后自动删除最旧的文件）
+- 系统在文件上传成功后自动触发清理逻辑
 
 **成功响应**
 ```json
@@ -347,7 +351,9 @@ X-User_Name: user_001
 
 ## 4. 日志处理接口
 
-### 5.1 开始处理日志文件
+### 4.1 开始处理日志文件（统一接口）
+
+统一的日志处理接口，支持从上传文件或服务器路径读取日志进行分析。通过 `source` 参数区分文件来源。
 
 **请求**
 ```http
@@ -358,10 +364,14 @@ Content-Type: application/json
 
 {
     "file_path": "/path/to/log/file.log",
+    "source": "upload",
     "chunk_size": 50000,
     "force_restart": false,
     "use_llm": true,
-    "merge_config": "default"
+    "recursive": false,
+    "max_file_size": 104857600,
+    "file_patterns": ["*.log"],
+    "selected_files": []
 }
 ```
 
@@ -369,12 +379,60 @@ Content-Type: application/json
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| file_path | string | 否 | - | 单个文件路径（与 directory_path 二选一） |
-| directory_path | string | 否 | - | 目录路径（与 file_path 二选一） |
-| chunk_size | int | 否 | 1000000 | 处理块大小（字节），建议值：10000-1000000 |
+| file_path | string | 是 | - | 文件或目录路径 |
+| source | string | 否 | "upload" | 文件来源：`upload`（上传文件）或 `server`（服务器路径文件） |
+| chunk_size | int | 否 | 50000 | 处理块大小（行数） |
 | force_restart | bool | 否 | false | 是否强制重启已存在的任务 |
 | use_llm | bool | 否 | true | 是否使用LLM分析（false则使用规则引擎） |
-| merge_config | string | 否 | "default" | 错误合并策略：default/strict/lenient |
+| recursive | bool | 否 | false | 是否递归读取子目录（仅source="server"时有效） |
+| max_file_size | int | 否 | 104857600 | 最大文件大小（字节），默认100MB（仅source="server"时有效） |
+| file_patterns | array | 否 | null | 文件匹配模式（仅source="server"时有效） |
+| selected_files | array | 否 | [] | 用户选中的文件路径列表（仅source="server"时有效） |
+
+**source 参数说明**
+
+| 值 | 说明 | 安全验证 | 支持功能 |
+|----|------|---------|---------|
+| `upload` | 上传文件模式，直接处理指定路径 | 无需 | 仅支持单文件处理 |
+| `server` | 服务器路径模式，从服务器读取文件 | 需要（白名单目录） | 支持目录扫描、递归读取、文件选择 |
+
+**两种模式的对比**
+
+| 对比维度 | `source: "upload"` | `source: "server"` |
+|---------|-------------------|-------------------|
+| **文件来源** | 用户上传到服务器的文件 | 服务器上已存在的文件 |
+| **路径验证** | 简单验证文件是否存在 | 严格安全验证（白名单目录限制） |
+| **目录扫描** | 不支持 | 支持 |
+| **递归读取** | 不支持 | 支持 |
+| **报告前缀** | `report_upload_` | `report_server_` |
+| **日志前缀** | `web_upload_` | `web_server_` |
+
+**使用示例**
+
+**示例1：处理上传文件**
+```http
+POST /api/process
+Content-Type: application/json
+
+{
+    "file_path": "/users/user_001/uploads/error.log",
+    "source": "upload",
+    "use_llm": true
+}
+```
+
+**示例2：处理服务器选中文件（单选/多选）**
+```http
+POST /api/process
+Content-Type: application/json
+
+{
+    "file_path": "/var/log",
+    "source": "server",
+    "selected_files": ["/var/log/nginx/error.log", "/var/log/nginx/access.log"],
+    "use_llm": true
+}
+```
 
 **成功响应**
 ```json
@@ -384,8 +442,7 @@ Content-Type: application/json
     "data": {
         "task_id": "user_001_20260601_100000_123456",
         "status": "pending",
-        "file_count": 1,
-        "total_size": 10485760
+        "total_files": 1
     }
 }
 ```
@@ -394,70 +451,25 @@ Content-Type: application/json
 ```json
 {
     "code": 1,
-    "message": "file_path 和 directory_path 必须提供一个",
+    "message": "文件不存在",
     "data": null
 }
 ```
 
-### 5.2 从服务器路径读取并处理
+**报告和日志文件命名规则**
 
-**请求**
-```http
-POST /api/process-from-path
-X-User-Id: user_001
-X-User_Name: user_001
-Content-Type: application/json
+根据 `source` 参数值，报告和日志文件会自动添加相应前缀：
 
-{
-    "path": "/var/log",
-    "recursive": true,
-    "file_patterns": ["*.log"],
-    "max_file_size": 104857600,
-    "use_llm": true
-}
-```
-
-**参数说明**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| path | string | 是 | - | 文件或目录路径 |
-| recursive | bool | 否 | false | 是否递归读取子目录 |
-| max_file_size | int | 否 | 104857600 | 最大文件大小（字节），默认100MB |
-| file_patterns | array | 否 | null | 文件匹配模式，为空则匹配所有支持的类型 |
-| use_llm | bool | 否 | true | 是否使用LLM分析 |
-| chunk_size | int | 否 | 50000 | 处理块大小 |
-
-**成功响应**
-```json
-{
-    "code": 0,
-    "message": "任务已创建，正在处理 3 个文件",
-    "data": {
-        "task_id": "path_user_001_20260601_100000_123456",
-        "status": "pending",
-        "file_count": 3,
-        "total_size": 31457280,
-        "files": [
-            "/var/log/nginx/error.log",
-            "/var/log/nginx/access.log",
-            "/var/log/messages"
-        ]
-    }
-}
-```
-
-**与 /api/upload + /api/process 的区别**
-- 无需先上传文件到服务器
-- 直接从服务器指定路径读取
-- 适用于已存在于服务器上的日志文件
-- 支持 PCAP 网络抓包文件分析
+| 文件类型 | source=upload | source=server |
+|---------|--------------|--------------|
+| **报告文件** | `report_upload_文件名_时间戳.pdf` | `report_server_文件名_时间戳.pdf` |
+| **日志文件** | `web_upload_时间戳_文件名.log` | `web_server_时间戳_文件名.log` |
 
 ---
 
 ## 5. 任务管理接口
 
-### 6.1 获取任务状态
+### 5.1 获取任务状态
 
 **请求**
 ```http
@@ -513,6 +525,12 @@ X-User_Name: user_001
 ---
 
 ## 6. 报告接口
+
+### 报告数量限制
+> 系统自动管理存储空间，超出限制时自动清理旧文件：
+- 每个用户最多保留 **50 个报告记录**（约 200 个文件，每个报告包含 md/html/pdf/docx 多种格式）
+- 超出后自动删除最旧报告的所有文件
+- 系统在报告生成完成后自动触发清理逻辑
 
 ### 7.1 获取报告列表
 

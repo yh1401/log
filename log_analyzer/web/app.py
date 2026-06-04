@@ -47,6 +47,11 @@ TASKS_DIR = PROJECT_ROOT / "log_analyzer" / "tasks"
 ensure_dir(str(USERS_DIR))
 ensure_dir(str(TASKS_DIR))
 
+# 文件数量限制配置
+MAX_REPORT_RECORDS = 50          # 每个用户最大报告记录数（每个记录包含多个文件）
+MAX_REPORT_FILES_PER_USER = 200  # 每个用户报告文件总数限制 (4 * 50)
+MAX_UPLOAD_FILES_PER_USER = 50  # 每个用户上传文件数量限制
+
 # 配置允许访问的目录（权限控制）- 跨平台支持
 import sys
 
@@ -208,6 +213,111 @@ def get_user_checkpoints_dir(user_id: str) -> Path:
     checkpoint_dir = get_user_dir(user_id) / "checkpoints"
     ensure_dir(str(checkpoint_dir))
     return checkpoint_dir
+
+
+def cleanup_old_reports(user_id: str):
+    """清理用户报告目录中超出限制的旧文件
+    
+    规则：
+    1. 每个报告记录包含多个文件（md, html, pdf, docx）
+    2. 最多保留 MAX_REPORT_RECORDS 个报告记录（约 MAX_REPORT_FILES_PER_USER 个文件）
+    """
+    try:
+        reports_dir = get_user_reports_dir(user_id)
+        if not reports_dir.exists():
+            return
+        
+        # 获取所有报告文件，按修改时间排序（最新的在前）
+        all_files = []
+        for file in reports_dir.iterdir():
+            if file.is_file():
+                all_files.append({
+                    "path": file,
+                    "mtime": file.stat().st_mtime,
+                    "name": file.name
+                })
+        
+        # 按修改时间降序排序
+        all_files.sort(key=lambda x: x["mtime"], reverse=True)
+        
+        # 计算需要删除的文件数
+        files_to_remove = len(all_files) - MAX_REPORT_FILES_PER_USER
+        if files_to_remove <= 0:
+            return
+        
+        # 获取报告记录名（去掉扩展名和日期后缀）
+        # 报告文件名格式: report_{source}_【{filename}】_{timestamp}.{ext}
+        report_groups = {}
+        for f in all_files:
+            # 提取报告记录标识（基于文件名和时间戳）
+            name = f["name"]
+            # 找到时间戳部分（格式: _YYYYMMDD_HHMMSS）
+            import re
+            match = re.search(r'_(\d{8}_\d{6})', name)
+            if match:
+                record_key = match.group(1)
+                if record_key not in report_groups:
+                    report_groups[record_key] = []
+                report_groups[record_key].append(f)
+        
+        # 按时间排序报告记录（最新的在前）
+        sorted_records = sorted(report_groups.keys(), reverse=True)
+        
+        # 保留前 MAX_REPORT_RECORDS 个记录
+        records_to_keep = sorted_records[:MAX_REPORT_RECORDS]
+        
+        # 删除超出限制的记录的所有文件
+        for record_key in sorted_records[MAX_REPORT_RECORDS:]:
+            for f in report_groups[record_key]:
+                try:
+                    f["path"].unlink()
+                    logging.info(f"清理旧报告文件: {f['name']}")
+                except Exception as e:
+                    logging.error(f"删除旧报告文件失败 {f['name']}: {str(e)}")
+                    
+    except Exception as e:
+        logging.error(f"清理旧报告失败: {str(e)}")
+
+
+def cleanup_old_uploads(user_id: str):
+    """清理用户上传目录中超出限制的旧文件
+    
+    规则：最多保留 MAX_UPLOAD_FILES_PER_USER 个上传文件
+    """
+    try:
+        upload_dir = get_user_upload_dir(user_id)
+        if not upload_dir.exists():
+            return
+        
+        # 获取所有上传文件，按修改时间排序（最新的在前）
+        all_files = []
+        for file in upload_dir.iterdir():
+            if file.is_file():
+                all_files.append({
+                    "path": file,
+                    "mtime": file.stat().st_mtime,
+                    "name": file.name
+                })
+        
+        # 按修改时间降序排序
+        all_files.sort(key=lambda x: x["mtime"], reverse=True)
+        
+        # 计算需要删除的文件数
+        files_to_remove = len(all_files) - MAX_UPLOAD_FILES_PER_USER
+        if files_to_remove <= 0:
+            return
+        
+        # 删除最旧的文件
+        files_to_delete = all_files[-files_to_remove:]
+        for f in files_to_delete:
+            try:
+                f["path"].unlink()
+                logging.info(f"清理旧上传文件: {f['name']}")
+            except Exception as e:
+                logging.error(f"删除旧上传文件失败 {f['name']}: {str(e)}")
+                    
+    except Exception as e:
+        logging.error(f"清理旧上传文件失败: {str(e)}")
 
 
 async def get_current_user(
@@ -508,10 +618,17 @@ ensure_dir(str(LOGS_DIR))
 processing_tasks: Dict[str, Dict[str, Any]] = {}
 
 class ProcessRequest(BaseModel):
+    """统一的日志文件处理请求模型"""
     file_path: Optional[str] = None
     directory_path: Optional[str] = None
+    source: str = "upload"  # "upload" 表示上传文件，"server" 表示服务器路径文件
     chunk_size: int = 50000
     force_restart: bool = False
+    # 服务器路径特有参数
+    recursive: bool = False
+    max_file_size: int = 100 * 1024 * 1024
+    file_patterns: Optional[List[str]] = None
+    selected_files: Optional[List[str]] = None
 
 class ProcessResponse(BaseModel):
     task_id: str
@@ -533,6 +650,7 @@ class PathReadRequest(BaseModel):
     recursive: bool = False  # 是否递归读取子目录
     max_file_size: int = 100 * 1024 * 1024  # 最大文件大小：100MB
     file_patterns: Optional[List[str]] = None  # 文件匹配模式，如 ["*.log", "*.txt"]
+    selected_files: Optional[List[str]] = None  # 用户选中的文件路径列表（可选）
 
 class PathReadResponse(BaseModel):
     """路径读取响应模型"""
@@ -560,12 +678,12 @@ def validate_and_resolve_path(requested_path: str) -> tuple:
         requested_path: 用户请求的路径
         
     Returns:
-        tuple: (resolved_path, error_message)
-        - 成功：返回绝对路径，error为None
-        - 失败：path为None，error包含错误信息
+        tuple: (resolved_path, error_message, is_file)
+        - 成功：返回绝对路径，error为None，is_file表示是否为文件
+        - 失败：path为None，error包含错误信息，is_file为False
     """
     if not requested_path:
-        return None, "路径不能为空"
+        return None, "路径不能为空", False
     
     try:
         # 解析路径，去除多余的斜杠和相对路径
@@ -574,15 +692,15 @@ def validate_and_resolve_path(requested_path: str) -> tuple:
         
         # 路径遍历检查
         if '..' in requested_path:
-            return None, "禁止使用 '..' 进行路径遍历"
+            return None, "禁止使用 '..' 进行路径遍历", False
         
         # 检查是否为绝对路径
         if not resolved_path.is_absolute():
-            return None, "只支持绝对路径"
+            return None, "只支持绝对路径", False
         
         # 检查路径是否存在
         if not resolved_path.exists():
-            return None, f"路径不存在: {requested_path}"
+            return None, f"路径不存在: {requested_path}", False
         
         # 安全检查：确保路径在允许的目录内或项目目录内
         is_allowed = False
@@ -606,20 +724,24 @@ def validate_and_resolve_path(requested_path: str) -> tuple:
                     continue
         
         if not is_allowed:
-            return None, f"路径不在允许的读取范围内。允许的目录: {', '.join(ALLOWED_READ_PATHS + [str(PROJECT_ROOT)])}"
+            return None, f"路径不在允许的读取范围内。允许的目录: {', '.join(ALLOWED_READ_PATHS + [str(PROJECT_ROOT)])}", False
         
         # 检查读权限
         if not os.access(resolved_path, os.R_OK):
-            return None, f"无读取权限: {requested_path}"
+            return None, f"无读取权限: {requested_path}", False
         
-        return str(resolved_path), None
+        # 判断是文件还是目录
+        is_file = resolved_path.is_file()
+        
+        return str(resolved_path), None, is_file
         
     except Exception as e:
-        return None, f"路径验证失败: {str(e)}"
+        return None, f"路径验证失败: {str(e)}", False
 
 def scan_directory_for_logs(dir_path: str, recursive: bool = False, 
                            patterns: Optional[List[str]] = None,
-                           max_size: int = 100 * 1024 * 1024) -> tuple:
+                           max_size: int = 100 * 1024 * 1024,
+                           selected_files: Optional[List[str]] = None) -> tuple:
     """
     扫描目录查找日志文件
     
@@ -628,6 +750,7 @@ def scan_directory_for_logs(dir_path: str, recursive: bool = False,
         recursive: 是否递归扫描子目录
         patterns: 文件匹配模式列表
         max_size: 最大文件大小限制
+        selected_files: 指定的文件路径列表（如果指定，则只处理这些文件）
         
     Returns:
         tuple: (files_list, error_message)
@@ -651,8 +774,33 @@ def scan_directory_for_logs(dir_path: str, recursive: bool = False,
                         "size": stat.st_size,
                         "size_str": format_bytes(stat.st_size),
                         "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        "type": "file"
+                        "type": "file",
+                        "selected": True  # 单文件默认选中
                     })
+            return log_files, None
+        
+        # 如果指定了选中的文件列表，直接处理这些文件
+        if selected_files and len(selected_files) > 0:
+            for file_path_str in selected_files:
+                file_path = Path(file_path_str)
+                if file_path.is_file():
+                    try:
+                        stat = file_path.stat()
+                        if stat.st_size <= max_size:
+                            log_files.append({
+                                "name": file_path.name,
+                                "path": str(file_path),
+                                "size": stat.st_size,
+                                "size_str": format_bytes(stat.st_size),
+                                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                                "type": "file",
+                                "selected": True,
+                                "relative_path": str(file_path.relative_to(scan_path)) if scan_path in file_path.parents else None
+                            })
+                    except (OSError, PermissionError):
+                        continue
+            # 按修改时间排序，最新的在前
+            log_files.sort(key=lambda x: x['modified'], reverse=True)
             return log_files, None
         
         # 目录扫描
@@ -726,12 +874,12 @@ def read_file_preview(file_path: str, max_lines: int = 100) -> tuple:
     except Exception as e:
         return None, f"读取文件失败: {str(e)}"
 
-def setup_logging(task_id: str, file_paths: List[str] = None) -> tuple:
+def setup_logging(task_id: str, file_paths: List[str] = None, source: str = "upload") -> tuple:
     ensure_dir(str(LOGS_DIR))
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
-    # 判断是否为路径读取任务
-    is_path_task = task_id.startswith('path_')
+    # 根据来源选择日志文件前缀：web_upload 或 web_server
+    log_prefix = f'web_{source}'
     
     if file_paths:
         file_names = [Path(fp).stem for fp in file_paths[:3]]
@@ -740,16 +888,9 @@ def setup_logging(task_id: str, file_paths: List[str] = None) -> tuple:
         else:
             file_label = f"{file_names[0]}_等{len(file_paths)}个文件"
         
-        # 根据任务类型选择日志文件前缀
-        if is_path_task:
-            log_file = LOGS_DIR / f'web_path_{timestamp}_{file_label}.log'
-        else:
-            log_file = LOGS_DIR / f'web_process_{timestamp}_{file_label}.log'
+        log_file = LOGS_DIR / f'{log_prefix}_{timestamp}_{file_label}.log'
     else:
-        if is_path_task:
-            log_file = LOGS_DIR / f'web_path_{timestamp}_{task_id[:8]}.log'
-        else:
-            log_file = LOGS_DIR / f'web_process_{timestamp}_{task_id[:8]}.log'
+        log_file = LOGS_DIR / f'{log_prefix}_{timestamp}_{task_id[:8]}.log'
 
     formatter = logging.Formatter(
         fmt='%(asctime)s [%(levelname)s] %(message)s',
@@ -793,7 +934,8 @@ async def process_log_files(
     task_id: str,
     file_paths: List[str],
     chunk_size: int = 50000,
-    force_restart: bool = False
+    force_restart: bool = False,
+    source: str = "upload"
 ):
     task_info = processing_tasks[task_id]
     task_info["status"] = "processing"
@@ -808,7 +950,7 @@ async def process_log_files(
     ensure_dir(str(user_checkpoints_dir))
 
     try:
-        log_file, logger = setup_logging(task_id, file_paths)
+        log_file, logger = setup_logging(task_id, file_paths, source)
         task_info["log_file"] = log_file
 
         llm_config_path = "/Users/a666/Documents/trae_projects/log/log_analyzer/llmconfig"
@@ -1160,15 +1302,25 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                             json.dump(task_info, f, indent=2)
                         
                         report = report_generator.generate_report(result)
-                        saved_files = report_generator.save_report(report, format="html+md+pdf+word")
+                        # 根据来源添加前缀区分：report_upload 或 report_server
+                        prefix = f"report_{source}_【{Path(file_path).stem}】"
+                        saved_files = report_generator.save_report(report, format="html+md+pdf+word", prefix=prefix)
                         logger.info(f"[Task {task_id}] 报告已保存: {saved_files}")
                         for saved_file in saved_files:
                             file_type = "html" if saved_file.endswith(".html") else "pdf" if saved_file.endswith(".pdf") else "word" if saved_file.endswith(".docx") else "markdown" if saved_file.endswith(".md") else "json"
-                            all_reports.append({
+                            report_entry = {
                                 "name": Path(saved_file).name,
                                 "path": saved_file,
                                 "type": file_type
-                            })
+                            }
+                            # 如果是MD文件，读取文件内容返回
+                            if file_type == "markdown":
+                                try:
+                                    with open(saved_file, 'r', encoding='utf-8') as f:
+                                        report_entry["content"] = f.read()
+                                except Exception as e:
+                                    logger.warning(f"[Task {task_id}] 读取MD文件内容失败: {e}")
+                            all_reports.append(report_entry)
                         processed_files += 1
                     else:
                         logger.warning(f"[Task {task_id}] 文件处理未完成，状态: {result.status}")
@@ -1186,15 +1338,25 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
             
             try:
                 combined_report = report_generator.generate_combined_report(all_results)
-                combined_files = report_generator.save_report(combined_report, format="html+md+pdf+word", prefix="combined")
+                # 根据来源添加前缀区分：report_upload_combined 或 report_server_combined
+                prefix = f"report_{source}_combined"
+                combined_files = report_generator.save_report(combined_report, format="html+md+pdf+word", prefix=prefix)
                 logger.info(f"[Task {task_id}] 综合报告已保存: {combined_files}")
                 for saved_file in combined_files:
                     file_type = "html" if saved_file.endswith(".html") else "pdf" if saved_file.endswith(".pdf") else "word" if saved_file.endswith(".docx") else "markdown" if saved_file.endswith(".md") else "json"
-                    all_reports.append({
+                    report_entry = {
                         "name": Path(saved_file).name,
                         "path": saved_file,
                         "type": file_type
-                    })
+                    }
+                    # 如果是MD文件，读取文件内容返回
+                    if file_type == "markdown":
+                        try:
+                            with open(saved_file, 'r', encoding='utf-8') as f:
+                                report_entry["content"] = f.read()
+                        except Exception as e:
+                            logger.warning(f"[Task {task_id}] 读取MD文件内容失败: {e}")
+                    all_reports.append(report_entry)
             except Exception as e:
                 logger.error(f"[Task {task_id}] 生成综合报告失败: {str(e)}")
 
@@ -1340,6 +1502,7 @@ async def process_from_path(
     
     功能：
     - 读取指定路径的日志文件
+    - 支持选择具体文件进行分析（通过 selected_files 参数）
     - 自动验证和过滤
     - 后台异步处理
     - 生成多格式报告
@@ -1348,6 +1511,10 @@ async def process_from_path(
     - 无需先上传文件到服务器
     - 直接从服务器指定路径读取
     - 适用于已存在于服务器上的日志文件
+    
+    支持两种模式：
+    1. 目录模式：传入目录路径，自动扫描目录下的日志文件
+    2. 文件模式：传入文件路径或通过 selected_files 指定具体文件
     """
     # 记录请求开始时间
     start_time = datetime.now()
@@ -1360,10 +1527,11 @@ async def process_from_path(
     logger.info(f"[{start_time.strftime('%Y-%m-%d %H:%M:%S')}] [参数] 递归扫描: {request.recursive}")
     logger.info(f"[{start_time.strftime('%Y-%m-%d %H:%M:%S')}] [参数] 文件模式: {request.file_patterns}")
     logger.info(f"[{start_time.strftime('%Y-%m-%d %H:%M:%S')}] [参数] 最大文件大小: {request.max_file_size}")
+    logger.info(f"[{start_time.strftime('%Y-%m-%d %H:%M:%S')}] [参数] 选中文件数: {len(request.selected_files) if request.selected_files else 0}")
     
     # 验证路径
     logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [步骤] 开始路径验证...")
-    resolved_path, error = validate_and_resolve_path(request.path)
+    resolved_path, error, is_file = validate_and_resolve_path(request.path)
     
     if error:
         logger.error(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [错误] 路径验证失败: {error}")
@@ -1373,15 +1541,16 @@ async def process_from_path(
             "data": None
         }, status_code=400)
     
-    logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [成功] 路径验证通过，解析路径: {resolved_path}")
+    logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [成功] 路径验证通过，解析路径: {resolved_path} (类型: {'文件' if is_file else '目录'})")
     
-    # 扫描目录查找日志文件
+    # 扫描目录查找日志文件（支持选中文件模式）
     logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [步骤] 开始扫描目录...")
     files, scan_error = scan_directory_for_logs(
         dir_path=resolved_path,
         recursive=request.recursive,
         patterns=request.file_patterns,
-        max_size=request.max_file_size
+        max_size=request.max_file_size,
+        selected_files=request.selected_files
     )
     
     if scan_error:
@@ -1505,7 +1674,7 @@ async def process_files_from_path(
     from .action_logger import record_task_start, record_task_complete, record_task_failed
     
     # 初始化组件
-    log_file, task_logger = setup_logging(task_id, file_paths)
+    log_file, task_logger = setup_logging(task_id, file_paths, source="server")
     llm_config = load_llm_config()
     
     # 记录任务开始
@@ -1694,7 +1863,7 @@ async def process_files_from_path(
                             json.dump(task_info, f, indent=2)
                         
                         report = report_generator.generate_report(result)
-                        saved_files = report_generator.save_report(report, format="html+md+pdf+word", prefix="report_path")
+                        saved_files = report_generator.save_report(report, format="html+md+pdf+word", prefix=f"report_path_【{Path(file_path).stem}】")
                         
                         task_logger.info(f"[Task {task_id}] 报告已保存: {saved_files}")
                         
@@ -1759,6 +1928,9 @@ async def process_files_from_path(
         task_logger.info(f"[Task {task_id}] 任务完成！成功处理 {processed_files}/{total_files} 个文件")
         
         record_task_complete(user_id, task_id)
+        
+        # 清理超出限制的旧报告文件
+        cleanup_old_reports(user_id)
     
     except Exception as e:
         import traceback
@@ -1814,6 +1986,9 @@ async def upload_file(file: UploadFile = File(...), current_user: Dict = Depends
                 'name': file.filename,
                 'size': format_bytes(len(content))
             })
+
+        # 清理超出限制的旧上传文件
+        cleanup_old_uploads(current_user["user_id"])
 
         return JSONResponse({
             "code": 0,
@@ -2044,31 +2219,77 @@ async def start_processing(
     background_tasks: BackgroundTasks,
     current_user: Dict = Depends(get_current_user)
 ):
-    """开始处理日志文件（需要认证）"""
+    """开始处理日志文件（需要认证）
+    
+    支持两种来源：
+    - upload: 上传文件，直接处理指定路径
+    - server: 服务器路径文件，需要安全验证
+    """
     task_id = f"{current_user['user_id']}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
 
     file_paths = []
-
-    if request.file_path:
-        if not Path(request.file_path).exists():
+    
+    if request.source == "server":
+        # 服务器路径文件：需要安全验证
+        if not request.file_path:
             return JSONResponse({
                 "code": 1,
-                "message": "文件不存在",
+                "message": "服务器路径处理需要提供 file_path 参数",
                 "data": None
-            }, status_code=404)
-        file_paths.append(request.file_path)
-    elif request.directory_path:
-        dir_path = Path(request.directory_path)
-        if not dir_path.exists() or not dir_path.is_dir():
+            }, status_code=400)
+        
+        # 验证路径安全性
+        resolved_path, error, is_file = validate_and_resolve_path(request.file_path)
+        if error:
             return JSONResponse({
                 "code": 1,
-                "message": "目录不存在",
+                "message": error,
                 "data": None
-            }, status_code=404)
+            }, status_code=400)
+        
+        if request.selected_files and len(request.selected_files) > 0:
+            # 使用用户选中的文件
+            file_paths = request.selected_files
+        elif is_file:
+            # 单文件模式
+            file_paths = [resolved_path]
+        else:
+            # 目录模式：扫描目录
+            files, error = scan_directory_for_logs(
+                resolved_path,
+                recursive=request.recursive,
+                patterns=request.file_patterns,
+                max_size=request.max_file_size
+            )
+            if error:
+                return JSONResponse({
+                    "code": 1,
+                    "message": error,
+                    "data": None
+                }, status_code=400)
+            file_paths = files
+    else:
+        # 上传文件：原有逻辑
+        if request.file_path:
+            if not Path(request.file_path).exists():
+                return JSONResponse({
+                    "code": 1,
+                    "message": "文件不存在",
+                    "data": None
+                }, status_code=404)
+            file_paths.append(request.file_path)
+        elif request.directory_path:
+            dir_path = Path(request.directory_path)
+            if not dir_path.exists() or not dir_path.is_dir():
+                return JSONResponse({
+                    "code": 1,
+                    "message": "目录不存在",
+                    "data": None
+                }, status_code=404)
 
-        for file in dir_path.iterdir():
-            if file.is_file() and (file.suffix in ['.log', '.txt', '.pcap'] or 'error' in file.name.lower()):
-                file_paths.append(str(file))
+            for file in dir_path.iterdir():
+                if file.is_file() and (file.suffix in ['.log', '.txt', '.pcap'] or 'error' in file.name.lower()):
+                    file_paths.append(str(file))
 
     if not file_paths:
         return JSONResponse({
@@ -2089,7 +2310,8 @@ async def start_processing(
         "error": None,
         "user_id": current_user["user_id"],
         "reports_dir": str(user_reports_dir),
-        "checkpoints_dir": str(user_checkpoints_dir)
+        "checkpoints_dir": str(user_checkpoints_dir),
+        "source": request.source  # 记录来源
     }
 
     background_tasks.add_task(
@@ -2097,7 +2319,8 @@ async def start_processing(
         task_id,
         file_paths,
         request.chunk_size,
-        request.force_restart
+        request.force_restart,
+        request.source  # 传递来源参数
     )
 
     return JSONResponse({
@@ -2105,7 +2328,8 @@ async def start_processing(
         "message": f"任务已创建，正在处理 {len(file_paths)} 个文件",
         "data": {
             "task_id": task_id,
-            "status": "pending"
+            "status": "pending",
+            "total_files": len(file_paths)
         }
     })
 

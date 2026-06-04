@@ -267,7 +267,7 @@
 
         .settings-section {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr;
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -1012,14 +1012,14 @@
                     </div>
                     <div class="setting-item">
                         <label class="setting-label checkbox-label">
-                            <input type="checkbox" id="forceRestart">
-                            强制重新处理
-                        </label>
-                    </div>
-                    <div class="setting-item">
-                        <label class="setting-label checkbox-label">
                             <input type="checkbox" id="useLlm" checked>
                             使用 LLM 分析（取消则使用规则模式）
+                        </label>
+                    </div>
+                    <div class="setting-item" style="display: none;">
+                        <label class="setting-label checkbox-label">
+                            <input type="checkbox" id="forceRestart">
+                            强制重新处理
                         </label>
                     </div>
                     <div class="setting-hint" style="grid-column: 1 / -1; margin-top: 8px; padding: 12px; background: rgba(0, 113, 227, 0.05); border-radius: 8px; font-size: 0.8125rem; color: var(--apple-gray);">
@@ -1292,17 +1292,47 @@
                             <button 
                                 class="btn btn-primary" 
                                 id="serverPathSubmitBtn" 
-                                onclick="console.log('serverPathSubmitBtn clicked'); processServerPath()"
+                                onclick="console.log('serverPathSubmitBtn clicked'); browseServerFiles()"
                                 disabled
                             >
-                                <span id="submitBtnIcon">🚀</span>
-                                <span>开始分析</span>
+                                <span id="submitBtnIcon">📁</span>
+                                <span>浏览文件</span>
                             </button>
                         </div>
+            </div>
+        </div>
+
+        <!-- Markdown报告预览模态框 -->
+        <div id="markdownPreviewModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10000; justify-content: center; align-items: center; backdrop-filter: blur(4px);" onclick="closeMarkdownModal()">
+            <div style="background: white; border-radius: 12px; padding: 0; max-width: 900px; width: 95%; max-height: 90vh; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.3); position: relative; z-index: 10001;" onclick="event.stopPropagation()">
+                <!-- 头部 -->
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: var(--apple-light-gray); border-bottom: 1px solid var(--apple-border-color);">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 1.5rem;">📝</span>
+                        <h2 style="font-size: 1.125rem; font-weight: 600; color: var(--apple-dark-gray);" id="markdownModalTitle">报告预览</h2>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button 
+                            class="btn btn-secondary" 
+                            onclick="closeMarkdownModal()"
+                            style="padding: 6px 12px; font-size: 0.875rem;"
+                        >
+                            关闭
+                        </button>
                     </div>
                 </div>
 
-                <!-- 历史报告列表模态框 -->
+                <!-- 内容区域 -->
+                <div id="markdownPreviewContent" style="padding: 24px; max-height: calc(90vh - 60px); overflow-y: auto; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;">
+                    <div style="text-align: center; padding: 40px;">
+                        <div class="loading" style="margin: 0 auto 16px;"></div>
+                        <div style="color: var(--apple-gray);">正在加载报告...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 历史报告列表模态框 -->
                 <div id="adminReportModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;" onclick="closeAdminModal()">
                     <div style="background: white; border-radius: var(--apple-radius); padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;" onclick="event.stopPropagation()">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
@@ -1759,12 +1789,18 @@
             container.style.display = 'block';
         }
 
+// 全局变量：存储选中的文件列表
+let selectedServerFiles = [];
+
         async function browseServerFiles() {
+            // 重置选中文件列表
+            selectedServerFiles = [];
+            
             const browseModal = document.createElement('div');
             browseModal.id = 'browseServerModal';
             browseModal.innerHTML = `
                 <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1010; justify-content: center; align-items: center; display: flex;">
-                    <div style="background: white; border-radius: var(--apple-radius); padding: 20px; max-width: 700px; width: 90%; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column;">
+                    <div style="background: white; border-radius: var(--apple-radius); padding: 20px; max-width: 800px; width: 90%; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                             <h3 style="font-size: 1rem; font-weight: 600;">浏览服务器目录</h3>
                             <button class="btn btn-secondary" id="browseCloseBtn" style="padding: 4px 10px; font-size: 0.8125rem;">关闭</button>
@@ -1789,11 +1825,22 @@
                             </div>
                             <div id="browsePathError" style="display: none; color: var(--apple-error); font-size: 0.75rem; margin-top: 4px;"></div>
                         </div>
+                        <!-- 操作栏 -->
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <div style="font-size: 0.75rem; color: var(--apple-gray);">
+                                <span id="selectedFileCount">已选择 0 个文件</span>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn btn-secondary" id="selectAllBtn" style="padding: 4px 10px; font-size: 0.75rem;" disabled>全选</button>
+                                <button class="btn btn-secondary" id="clearSelectionBtn" style="padding: 4px 10px; font-size: 0.75rem;" disabled>清除选择</button>
+                            </div>
+                        </div>
                         <div style="flex: 1; overflow-y: auto; background: var(--apple-light-gray); padding: 12px; border-radius: calc(var(--apple-radius) - 4px);" id="browseContent">
                             <div style="color: var(--apple-gray); text-align: center; padding: 20px;">加载中...</div>
                         </div>
-                        <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
-                            <button class="btn btn-primary" id="selectPathBtn" disabled style="opacity: 0.5; cursor: not-allowed;">选择此路径</button>
+                        <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 10px;">
+                            <button class="btn btn-secondary" id="selectDirBtn" disabled style="opacity: 0.5; cursor: not-allowed;">选择整个目录</button>
+                            <button class="btn btn-primary" id="selectFilesBtn" disabled style="opacity: 0.5; cursor: not-allowed;">分析选中文件</button>
                         </div>
                     </div>
                 </div>
@@ -1802,7 +1849,10 @@
 
             // 添加事件监听器
             const closeBtn = document.getElementById('browseCloseBtn');
-            const selectBtn = document.getElementById('selectPathBtn');
+            const selectFilesBtn = document.getElementById('selectFilesBtn');
+            const selectDirBtn = document.getElementById('selectDirBtn');
+            const selectAllBtn = document.getElementById('selectAllBtn');
+            const clearSelectionBtn = document.getElementById('clearSelectionBtn');
             const pathInput = document.getElementById('browsePathInput');
             const goBtn = document.getElementById('browseGoBtn');
             
@@ -1847,11 +1897,132 @@
                 errorDiv.style.display = 'block';
             }
             
-            if (selectBtn) {
-                selectBtn.addEventListener('click', selectCurrentPath);
+            // 全选功能
+            if (selectAllBtn) {
+                selectAllBtn.addEventListener('click', toggleSelectAllFiles);
+            }
+            
+            // 清除选择功能
+            if (clearSelectionBtn) {
+                clearSelectionBtn.addEventListener('click', clearFileSelection);
+            }
+            
+            // 选择文件功能
+            if (selectFilesBtn) {
+                selectFilesBtn.addEventListener('click', confirmSelectedFiles);
+            }
+            
+            // 选择目录功能
+            if (selectDirBtn) {
+                selectDirBtn.addEventListener('click', selectCurrentPath);
             }
 
             await loadDirectoryContents('/', 'browseContent');
+        }
+        
+        // 切换全选状态
+        function toggleSelectAllFiles() {
+            const checkboxes = document.querySelectorAll('.file-checkbox');
+            const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+            
+            checkboxes.forEach(cb => {
+                cb.checked = !allChecked;
+                toggleFileSelection(cb);
+            });
+        }
+        
+        // 清除选择
+        function clearFileSelection() {
+            selectedServerFiles = [];
+            document.querySelectorAll('.file-checkbox').forEach(cb => {
+                cb.checked = false;
+            });
+            updateSelectionUI();
+        }
+        
+        // 切换单个文件选择
+        function toggleFileSelection(checkbox) {
+            const filePath = checkbox.getAttribute('data-path');
+            const isChecked = checkbox.checked;
+            
+            if (isChecked) {
+                if (!selectedServerFiles.includes(filePath)) {
+                    selectedServerFiles.push(filePath);
+                }
+            } else {
+                const index = selectedServerFiles.indexOf(filePath);
+                if (index > -1) {
+                    selectedServerFiles.splice(index, 1);
+                }
+            }
+            updateSelectionUI();
+        }
+        
+        // 更新选择UI
+        function updateSelectionUI() {
+            const countSpan = document.getElementById('selectedFileCount');
+            const selectFilesBtn = document.getElementById('selectFilesBtn');
+            const selectAllBtn = document.getElementById('selectAllBtn');
+            const clearSelectionBtn = document.getElementById('clearSelectionBtn');
+            
+            if (countSpan) {
+                countSpan.textContent = `已选择 ${selectedServerFiles.length} 个文件`;
+            }
+            
+            if (selectFilesBtn) {
+                selectFilesBtn.disabled = selectedServerFiles.length === 0;
+                selectFilesBtn.style.opacity = selectedServerFiles.length === 0 ? '0.5' : '1';
+                selectFilesBtn.style.cursor = selectedServerFiles.length === 0 ? 'not-allowed' : 'pointer';
+            }
+            
+            if (selectAllBtn) {
+                const checkboxes = document.querySelectorAll('.file-checkbox');
+                selectAllBtn.disabled = checkboxes.length === 0;
+            }
+            
+            if (clearSelectionBtn) {
+                clearSelectionBtn.disabled = selectedServerFiles.length === 0;
+                clearSelectionBtn.style.opacity = selectedServerFiles.length === 0 ? '0.5' : '1';
+                clearSelectionBtn.style.cursor = selectedServerFiles.length === 0 ? 'not-allowed' : 'pointer';
+            }
+        }
+        
+        // 确认选中的文件（将服务器文件添加到主界面列表）
+        function confirmSelectedFiles() {
+            if (selectedServerFiles.length === 0) {
+                return;
+            }
+            
+            const browseModal = document.getElementById('browseServerModal');
+            if (browseModal) {
+                browseModal.remove();
+            }
+            
+            // 关闭服务器路径模态框
+            closeServerPathModal();
+            
+            // 将选中的服务器文件添加到主界面的文件列表
+            for (const filePath of selectedServerFiles) {
+                const fileName = filePath.substring(filePath.lastIndexOf('/') + 1);
+                const exists = selectedFiles.some(f => f.path === filePath);
+                if (!exists) {
+                    selectedFiles.push({
+                        path: filePath,
+                        name: fileName,
+                        size: 0,
+                        size_str: '服务器文件',
+                        uploaded: true,
+                        source: 'server'  // 标识来源：server 表示服务器文件，upload 表示上传文件
+                    });
+                }
+            }
+            
+            // 清空服务器文件选择
+            selectedServerFiles = [];
+            
+            // 更新界面显示
+            renderUploadedFiles();
+            updateStartButton();
         }
 
         function closeBrowseModal() {
@@ -1871,7 +2042,7 @@
                     body: JSON.stringify({
                         path: path,
                         recursive: false,
-                        file_patterns: []
+                        file_patterns: ['*.log', '*.txt', '*.pcap', '*.pcapng', '*.gz', '*.zip']
                     })
                 });
 
@@ -1914,14 +2085,28 @@
                             ? `onclick="loadDirectoryContents('${item.path}', '${containerId}')"` 
                             : '';
                         const cursor = item.type === 'directory' ? 'cursor: pointer' : '';
+                        const isSelected = item.type === 'file' && selectedServerFiles.includes(item.path);
+                        
+                        // 文件显示选择框，目录不显示
+                        const checkboxHtml = item.type === 'file' ? `
+                            <input 
+                                type="checkbox" 
+                                class="file-checkbox" 
+                                data-path="${item.path}" 
+                                ${isSelected ? 'checked' : ''}
+                                onchange="toggleFileSelection(this)"
+                                style="margin-right: 8px; width: 16px; height: 16px;"
+                            >
+                        ` : '';
                         
                         html += `
                             <div 
-                                style="padding: 8px 10px; border-radius: 6px; display: flex; align-items: center; gap: 8px; ${cursor}"
+                                style="padding: 8px 10px; border-radius: 6px; display: flex; align-items: center; gap: 8px; ${cursor} ${isSelected ? 'background: rgba(52, 199, 89, 0.1);' : ''}"
                                 ${clickHandler}
                                 onmouseenter="this.style.background='rgba(0,0,0,0.05)'"
-                                onmouseleave="this.style.background='transparent'"
+                                onmouseleave="this.style.background='${isSelected ? 'rgba(52, 199, 89, 0.1)' : 'transparent'}'"
                             >
+                                ${checkboxHtml}
                                 <span>${icon}</span>
                                 <span style="font-size: 0.875rem; color: ${color};">${item.name}</span>
                                 ${item.size_str ? `<span style="margin-left: auto; font-size: 0.75rem; color: var(--apple-gray);">${item.size_str}</span>` : ''}
@@ -1943,18 +2128,24 @@
                         errorDiv.style.display = 'none';
                     }
 
-                    // 更新选择按钮
-                    const selectBtn = document.getElementById('selectPathBtn');
-                    console.log('Updating select button:', selectBtn);
-                    if (selectBtn) {
-                        selectBtn.disabled = false;
-                        selectBtn.style.opacity = '1';
-                        selectBtn.style.cursor = 'pointer';
-                        selectBtn.setAttribute('data-path', path);
-                        console.log('Select button enabled, data-path:', path);
-                    } else {
-                        console.error('selectPathBtn not found when updating');
+                    // 更新选择目录按钮
+                    const selectDirBtn = document.getElementById('selectDirBtn');
+                    if (selectDirBtn) {
+                        selectDirBtn.disabled = false;
+                        selectDirBtn.style.opacity = '1';
+                        selectDirBtn.style.cursor = 'pointer';
+                        selectDirBtn.setAttribute('data-path', path);
                     }
+                    
+                    // 更新全选按钮状态
+                    const selectAllBtn = document.getElementById('selectAllBtn');
+                    if (selectAllBtn) {
+                        const checkboxes = document.querySelectorAll('.file-checkbox');
+                        selectAllBtn.disabled = checkboxes.length === 0;
+                    }
+                    
+                    // 更新选择UI（选中计数等）
+                    updateSelectionUI();
                 } else {
                     container.innerHTML = `<div style="color: var(--apple-error); text-align: center; padding: 20px;">${result.message || '加载失败'}</div>`;
                 }
@@ -2058,99 +2249,6 @@
                 return ['*.log'];
             }
             return patternStr.split(',').map(p => p.trim()).filter(p => p);
-        }
-
-        async function processServerPath() {
-            console.log('processServerPath called, validatedPath:', validatedPath);
-            if (!validatedPath) {
-                console.error('validatedPath is null or undefined');
-                alert('请先验证路径');
-                return;
-            }
-
-            const path = validatedPath;
-            const chunkSize = parseInt(document.getElementById('chunkSize').value);
-            const forceRestart = document.getElementById('forceRestart').checked;
-            const useLlm = document.getElementById('useLlm').checked;
-            const recursive = document.getElementById('recursiveOption').checked;
-            const maxFileSizeMb = parseInt(document.getElementById('maxFileSizeInput').value);
-            const filePatterns = parseFilePatterns(document.getElementById('filePatternInput').value);
-
-            closeServerPathModal();
-
-            const progressContainer = document.getElementById('progressContainer');
-            progressContainer.classList.add('active');
-            document.getElementById('startBtn').disabled = true;
-            document.getElementById('reportsContainer').innerHTML = '';
-            document.getElementById('errorMessage').style.display = 'none';
-            hideReconnectBanner();
-
-            resetStages();
-            setStage(0, `扫描路径: ${path}`);
-            document.getElementById('statusText').textContent = `正在扫描服务器路径: ${path}`;
-
-            try {
-                const response = await apiRequest('/api/process-from-path', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        path: path,
-                        recursive: recursive,
-                        file_patterns: filePatterns,
-                        max_file_size: maxFileSizeMb * 1024 * 1024,
-                        chunk_size: chunkSize,
-                        force_restart: forceRestart,
-                        use_llm: useLlm
-                    })
-                });
-
-                const result = await response.json();
-                if (result.code !== 0) {
-                    throw new Error(result.message || '处理失败');
-                }
-
-                currentTaskId = result.data.task_id;
-                const totalFiles = result.data.total_files || 1;
-
-                saveActiveTask({
-                    task_id: currentTaskId,
-                    user_id: getCurrentUserId(),
-                    file_name: path,
-                    file_path: path,
-                    total_files: totalFiles,
-                    processed_files: 0,
-                    status: 'pending',
-                    stage_index: 0,
-                    stage_detail: `已扫描到 ${totalFiles} 个文件`,
-                    created_at: Date.now()
-                });
-
-                await pollTaskUntilDone({
-                    task_id: currentTaskId,
-                    user_id: getCurrentUserId(),
-                    file_name: path,
-                    file_path: path,
-                    total_files: totalFiles,
-                    processed_files: 0,
-                    status: 'pending',
-                    stage_index: 0,
-                    stage_detail: `已扫描到 ${totalFiles} 个文件`,
-                    created_at: Date.now()
-                });
-
-                document.getElementById('statusText').textContent = `分析完成 (${currentTaskId})`;
-                document.getElementById('startBtn').disabled = false;
-                await loadHistory();
-
-            } catch (error) {
-                console.error('处理服务器路径失败:', error);
-                document.getElementById('errorMessage').textContent = `处理失败: ${error.message}`;
-                document.getElementById('errorMessage').style.display = 'block';
-                document.getElementById('startBtn').disabled = false;
-                resetStages();
-            }
         }
 
         // === 服务器路径读取功能结束 ===
@@ -2307,7 +2405,8 @@
                                         size: 0,
                                         size_str: fileSize,
                                         uploaded: true,
-                                        extracted: true
+                                        extracted: true,
+                                        source: 'upload'  // 标识来源
                                     });
                                 }
                             }
@@ -2322,7 +2421,8 @@
                                 name: data.file_name,
                                 size: (data.file_size || '').length,
                                 size_str: data.file_size || '',
-                                uploaded: true
+                                uploaded: true,
+                                source: 'upload'  // 标识来源
                             });
                         }
                     }
@@ -2347,10 +2447,10 @@
             container.innerHTML = uploadedOnly.map((file, index) => `
                 <div class="file-item">
                     <div class="file-info">
-                        <span class="file-icon">📄</span>
+                        <span class="file-icon">${file.source === 'server' ? '🖥️' : '📄'}</span>
                         <div class="file-details">
                             <div class="file-name">${file.name}</div>
-                            <div class="file-size">${file.size_str}</div>
+                            <div class="file-size">${file.size_str} ${file.source === 'server' ? '(服务器文件)' : '(上传文件)'}</div>
                         </div>
                     </div>
                     <button class="btn btn-danger" onclick="removeFile(${index})">移除</button>
@@ -2457,18 +2557,41 @@
                     setStage(0, `处理文件 ${i + 1}/${totalFiles}: ${file.name}`);
                     document.getElementById('statusText').textContent = `正在处理文件 ${i + 1}/${totalFiles}: ${file.name}`;
 
-                    const response = await apiRequest('/api/process', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            file_path: file.path,
-                            chunk_size: chunkSize,
-                            force_restart: forceRestart,
-                            use_llm: useLlm
-                        })
-                    });
+                    // 根据文件来源选择不同的接口
+                    let response, apiEndpoint;
+                    if (file.source === 'server') {
+                        // 服务器文件：调用统一的 /api/process 接口，source=server
+                        apiEndpoint = '/api/process';
+                        response = await apiRequest(apiEndpoint, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                file_path: file.path,
+                                source: 'server',  // 标识来源
+                                chunk_size: chunkSize,
+                                force_restart: forceRestart,
+                                use_llm: useLlm
+                            })
+                        });
+                    } else {
+                        // 上传文件：调用统一的 /api/process 接口，source=upload（默认）
+                        apiEndpoint = '/api/process';
+                        response = await apiRequest(apiEndpoint, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                file_path: file.path,
+                                source: 'upload',  // 标识来源
+                                chunk_size: chunkSize,
+                                force_restart: forceRestart,
+                                use_llm: useLlm
+                            })
+                        });
+                    }
 
                     const result = await response.json();
                     if (result.code !== 0) {
@@ -2712,25 +2835,89 @@
 
             container.innerHTML = statsHtml + `
                 <div class="report-list">
-                    ${reports.map(report => `
-                        <div class="report-item">
-                            <div class="report-info">
-                                <span class="report-icon">${report.type === 'markdown' ? '📝' : '📊'}</span>
-                                <div class="report-details">
-                                    <div class="report-name">${report.name}</div>
+                    ${reports.map(report => {
+                        const isMarkdown = report.type === 'markdown';
+                        return `
+                            <div class="report-item">
+                                <div class="report-info">
+                                    <span class="report-icon">${isMarkdown ? '📝' : '📊'}</span>
+                                    <div class="report-details">
+                                        <div class="report-name">${report.name}</div>
+                                    </div>
+                                </div>
+                                <div class="report-actions">
+                                    ${isMarkdown && report.content ? `<button class="btn btn-secondary" onclick="viewMarkdownReport('${encodeURIComponent(report.name)}', '${encodeURIComponent(report.content)}')">查看</button>` : ''}
+                                    <button class="btn btn-primary" onclick="downloadReport('${encodeURIComponent(report.path)}')">下载</button>
                                 </div>
                             </div>
-                            <div class="report-actions">
-                                <button class="btn btn-primary" onclick="downloadReport('${encodeURIComponent(report.path)}')">下载</button>
-                            </div>
-                        </div>
-                    `).join('')}
+                        `;
+                    }).join('')}
                 </div>
             `;
         }
 
         async function downloadReport(path) {
             window.open(`/api/download/${decodeURIComponent(path)}`, '_blank');
+        }
+
+        function viewMarkdownReport(title, content) {
+            const modal = document.getElementById('markdownPreviewModal');
+            const titleElement = document.getElementById('markdownModalTitle');
+            const contentElement = document.getElementById('markdownPreviewContent');
+            
+            // 设置标题
+            titleElement.textContent = decodeURIComponent(title);
+            
+            // 将Markdown转换为HTML并显示
+            contentElement.innerHTML = markdownToHtml(decodeURIComponent(content));
+            
+            // 显示模态框
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeMarkdownModal() {
+            const modal = document.getElementById('markdownPreviewModal');
+            modal.style.display = 'none';
+            document.body.style.overflow = '';
+        }
+
+        function markdownToHtml(markdown) {
+            if (!markdown) return '<p>暂无内容</p>';
+            
+            let html = markdown;
+            
+            // 处理标题
+            html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+            html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+            html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+            html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+            
+            // 处理粗体和斜体
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+            
+            // 处理列表
+            html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+            html = html.replace(/<\/li>\n<li>/g, '</li><li>');
+            html = html.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
+            
+            // 处理代码块
+            html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            
+            // 处理链接
+            html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+            
+            // 处理换行
+            html = html.replace(/\n/g, '<br>');
+            
+            // 清理多余的空行
+            html = html.replace(/<br><br>/g, '</p><p>');
+            html = html.replace(/<ul><br>/g, '<ul>');
+            html = html.replace(/<br><\/ul>/g, '</ul>');
+            
+            return `<div style="line-height: 1.8;">${html}</div>`;
         }
 
         function showError(message) {
@@ -2781,6 +2968,7 @@
                 <div class="report-list">
                     ${displayedReports.map(report => {
                         const isDownloadable = DOWNLOADABLE_TYPES.includes(report.type);
+                        const isMarkdown = report.type === 'markdown';
                         const icon = report.type === 'pdf' ? '📄' : report.type === 'word' ? '📝' : report.type === 'markdown' ? '📘' : '📊';
                         return `
                             <div class="report-item">
@@ -2792,6 +2980,7 @@
                                     </div>
                                 </div>
                                 <div class="report-actions">
+                                    ${isMarkdown ? `<button class="btn btn-secondary" onclick="viewHistoryMarkdown('${encodeURIComponent(report.name)}', '${encodeURIComponent(report.path)}')">查看</button>` : ''}
                                     ${isDownloadable ? `
                                         <button class="btn btn-primary" onclick="downloadReport('${encodeURIComponent(report.path)}')">下载</button>
                                     ` : ''}
@@ -2801,6 +2990,30 @@
                     }).join('')}
                 </div>
             `;
+        }
+
+        async function viewHistoryMarkdown(title, path) {
+            try {
+                // 从服务器加载MD文件内容
+                const response = await fetch(`/api/download/${path}`, {
+                    headers: {
+                        'X-User-Id': getCurrentUserId(),
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const content = await response.text();
+                
+                // 使用已有的查看函数显示
+                viewMarkdownReport(title, encodeURIComponent(content));
+            } catch (error) {
+                console.error('加载历史报告失败:', error);
+                alert('加载历史报告失败: ' + error.message);
+            }
         }
 
         document.querySelectorAll('.tab').forEach(tab => {

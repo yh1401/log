@@ -2258,9 +2258,9 @@ class ReportGenerator:
         prefix: str = "report"
     ) -> List[str]:
         saved_files = []
-        base_name = os.path.splitext(os.path.basename(report.file_path))[0]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_name = f"{prefix}_【{base_name}】_{timestamp}"
+        # 直接使用 prefix，不再从 report.file_path 提取文件名，避免重复
+        report_name = f"{prefix}_{timestamp}"
 
         formats = format.split('+') if '+' in format else [format]
         
@@ -2291,6 +2291,7 @@ class ReportGenerator:
         if need_pdf:
             try:
                 pdf_path = os.path.join(self.output_dir, f"{report_name}.pdf")
+                # 使用类方法 _save_as_pdf，它接收 Report 对象
                 self._save_as_pdf(report, pdf_path)
                 saved_files.append(pdf_path)
             except ImportError:
@@ -2364,7 +2365,8 @@ class ReportGenerator:
         content = re.sub(r'_(.+?)_', r'<i>\1</i>', content)
         
         # 处理标题（使用多行模式）
-        content = re.sub(r'^### (.+)$', r'<br/><b>\1</b>', content, flags=re.MULTILINE)
+        content = re.sub(r'^#### (.+)$', r'<br/><b><font size="11">\1</font></b>', content, flags=re.MULTILINE)
+        content = re.sub(r'^### (.+)$', r'<br/><b><font size="12">\1</font></b>', content, flags=re.MULTILINE)
         content = re.sub(r'^## (.+)$', r'<br/><br/><b><font size="14">\1</font></b>', content, flags=re.MULTILINE)
         content = re.sub(r'^# (.+)$', r'<br/><br/><b><font size="16">\1</font></b>', content, flags=re.MULTILINE)
         
@@ -2483,6 +2485,36 @@ class ReportGenerator:
             if not value:
                 continue
 
+            # 特殊处理处置动作建议数据
+            if key == '处置动作建议' and isinstance(value, dict):
+                self._add_response_actions_to_pdf(story, value, body_style)
+                continue
+            
+            # 特殊处理根因推断数据
+            if key == '根因推断' and isinstance(value, dict):
+                self._add_root_cause_to_pdf(story, value, body_style)
+                continue
+            
+            # 特殊处理因果链数据
+            if key == '因果链' and isinstance(value, dict):
+                self._add_causal_chain_to_pdf(story, value, body_style)
+                continue
+            
+            # 特殊处理证据链数据
+            if key == '证据链' and isinstance(value, dict):
+                self._add_evidence_chain_to_pdf(story, value, body_style)
+                continue
+            
+            # 特殊处理整改建议数据
+            if key == '整改建议' and isinstance(value, dict):
+                self._add_remediation_to_pdf(story, value, body_style)
+                continue
+            
+            # 特殊处理解决建议数据
+            if key == '解决建议' and isinstance(value, dict):
+                self._add_suggestions_to_pdf(story, value, body_style)
+                continue
+            
             story.append(Spacer(1, 0.2 * cm))
             story.append(Paragraph(f"<b>{key}:</b>", body_style))
 
@@ -2500,6 +2532,294 @@ class ReportGenerator:
                 story.append(Paragraph(str(value), body_style))
 
             story.append(Spacer(1, 0.2 * cm))
+
+    def _add_root_cause_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
+        """专门处理根因推断数据，以更易读的格式显示"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+        
+        if not data:
+            return
+        
+        story.append(Spacer(1, 0.2 * cm))
+        
+        # 直接原因
+        direct_cause = data.get('direct_cause', '')
+        if direct_cause:
+            story.append(Paragraph(f"<b>直接原因：</b>{direct_cause}", body_style))
+        
+        # 根本原因
+        fundamental_cause = data.get('fundamental_cause', '')
+        if fundamental_cause:
+            story.append(Spacer(1, 0.15 * cm))
+            story.append(Paragraph(f"<b>根本原因：</b>{fundamental_cause}", body_style))
+        
+        # 置信度
+        confidence = data.get('confidence', '')
+        if confidence:
+            story.append(Spacer(1, 0.15 * cm))
+            story.append(Paragraph(f"<b>置信度：</b>{confidence}", body_style))
+        
+        # 推理过程
+        reasoning = data.get('reasoning', '')
+        if reasoning:
+            story.append(Spacer(1, 0.15 * cm))
+            story.append(Paragraph(f"<b>推理过程：</b>{reasoning}", body_style))
+    
+    def _add_causal_chain_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
+        """专门处理因果链数据，以更易读的格式显示"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+        
+        if not data:
+            return
+        
+        story.append(Spacer(1, 0.2 * cm))
+        
+        # 因果链描述
+        chain_description = data.get('chain_description', '')
+        if chain_description:
+            story.append(Paragraph(f"<b>因果链描述：</b>{chain_description}", body_style))
+        
+        # 因果传播路径
+        chain_steps = data.get('chain_steps', [])
+        if chain_steps:
+            story.append(Spacer(1, 0.2 * cm))
+            story.append(Paragraph("<b>🔗 因果传播路径：</b>", body_style))
+            
+            for step in chain_steps:
+                if isinstance(step, dict):
+                    step_num = step.get('step', '')
+                    cause = step.get('cause', '')
+                    effect = step.get('effect', '')
+                    evidence = step.get('evidence', '')
+                    timestamp = step.get('timestamp', '')
+                    
+                    story.append(Spacer(1, 0.15 * cm))
+                    if step_num:
+                        story.append(Paragraph(f"<b>步骤 {step_num}：</b>", body_style))
+                    if cause:
+                        story.append(Paragraph(f"   • 原因：{cause}", body_style))
+                    if effect:
+                        story.append(Paragraph(f"   • 影响：{effect}", body_style))
+                    if evidence:
+                        story.append(Paragraph(f"   • 证据：{evidence}", body_style))
+                    if timestamp:
+                        story.append(Paragraph(f"   • 时间：{timestamp}", body_style))
+                else:
+                    story.append(Paragraph(f"   • {step}", body_style))
+    
+    def _add_evidence_chain_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
+        """专门处理证据链数据，以更易读的格式显示"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+        
+        if not data:
+            return
+        
+        story.append(Spacer(1, 0.2 * cm))
+        
+        # 证据链描述
+        description = data.get('description', '')
+        if description:
+            story.append(Paragraph(f"<b>证据链描述：</b>{description}", body_style))
+        
+        # 证据列表
+        evidences = data.get('evidences', [])
+        if evidences:
+            story.append(Spacer(1, 0.2 * cm))
+            story.append(Paragraph("<b>📋 证据列表：</b>", body_style))
+            
+            for i, evidence in enumerate(evidences, 1):
+                if isinstance(evidence, dict):
+                    timestamp = evidence.get('timestamp', '')
+                    evidence_type = evidence.get('evidence_type', '')
+                    content = evidence.get('content', '')
+                    relevance = evidence.get('relevance', '')
+                    
+                    story.append(Spacer(1, 0.15 * cm))
+                    story.append(Paragraph(f"<b>{i}. {evidence_type or '证据'}</b>", body_style))
+                    if timestamp:
+                        story.append(Paragraph(f"   • 时间：{timestamp}", body_style))
+                    if content:
+                        # 处理content可能是字典的情况
+                        if isinstance(content, dict):
+                            content_str = "; ".join(f"{k}: {v}" for k, v in content.items())
+                        else:
+                            content_str = str(content)
+                        story.append(Paragraph(f"   • 内容：{content_str}", body_style))
+                    if relevance:
+                        story.append(Paragraph(f"   • 相关性：{relevance}", body_style))
+                else:
+                    story.append(Paragraph(f"   • {evidence}", body_style))
+
+    def _add_remediation_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
+        """专门处理整改建议数据，以更易读的格式显示"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+        
+        if not data:
+            return
+        
+        story.append(Spacer(1, 0.2 * cm))
+        
+        # 立即处置
+        immediate = data.get('immediate', [])
+        if immediate:
+            story.append(Paragraph("<b>⚡ 立即处置（Immediate Actions）</b>", body_style))
+            story.append(Paragraph("<b>目标</b>: 快速恢复服务，最小化业务影响 | <b>时间要求</b>: 1小时内可执行", body_style))
+            self._add_action_items_to_pdf(story, immediate, body_style)
+        
+        # 根本原因修复
+        root_cause_fix = data.get('root_cause_fix', [])
+        if root_cause_fix:
+            story.append(Spacer(1, 0.3 * cm))
+            story.append(Paragraph("<b>🔧 根本原因修复（Root Cause Fix）</b>", body_style))
+            story.append(Paragraph("<b>目标</b>: 消除问题根源，防止复发 | <b>时间要求</b>: 短期修复", body_style))
+            self._add_action_items_to_pdf(story, root_cause_fix, body_style)
+        
+        # 架构与监控改进
+        architecture_monitoring = data.get('architecture_monitoring', [])
+        if architecture_monitoring:
+            story.append(Spacer(1, 0.3 * cm))
+            story.append(Paragraph("<b>🏗️ 架构与监控改进（Architecture & Monitoring）</b>", body_style))
+            story.append(Paragraph("<b>目标</b>: 增强系统韧性，提升可观测性 | <b>时间要求</b>: 中期优化", body_style))
+            self._add_action_items_to_pdf(story, architecture_monitoring, body_style)
+    
+    def _add_action_items_to_pdf(self, story, actions: list, body_style) -> None:
+        """将动作项列表以更易读的格式添加到PDF"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+        
+        for i, action in enumerate(actions, 1):
+            if isinstance(action, dict):
+                action_text = action.get('action', '')
+                target = action.get('target', '')
+                expected_effect = action.get('expected_effect', '')
+                effort = action.get('effort_estimate', '')
+                
+                story.append(Spacer(1, 0.2 * cm))
+                story.append(Paragraph(f"<b>{i}. {action_text}</b>", body_style))
+                
+                if target:
+                    story.append(Paragraph(f"   • 目标对象：{target}", body_style))
+                if expected_effect:
+                    story.append(Paragraph(f"   • 预期效果：{expected_effect}", body_style))
+                if effort:
+                    story.append(Paragraph(f"   • 工作量预估：{effort}", body_style))
+            else:
+                story.append(Paragraph(f"   • {action}", body_style))
+    
+    def _add_suggestions_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
+        """专门处理解决建议数据，以更易读的格式显示"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+        
+        if not data:
+            return
+        
+        story.append(Spacer(1, 0.2 * cm))
+        
+        # 运维建议
+        ops_suggestions = data.get('运维建议', [])
+        if ops_suggestions:
+            story.append(Paragraph("<b>🔹 运维建议</b>", body_style))
+            self._add_suggestion_items_to_pdf(story, ops_suggestions, body_style)
+        
+        # 开发建议
+        dev_suggestions = data.get('开发建议', [])
+        if dev_suggestions:
+            story.append(Spacer(1, 0.3 * cm))
+            story.append(Paragraph("<b>🔹 开发建议</b>", body_style))
+            self._add_suggestion_items_to_pdf(story, dev_suggestions, body_style)
+    
+    def _add_suggestion_items_to_pdf(self, story, suggestions: list, body_style) -> None:
+        """将建议项列表以更易读的格式添加到PDF"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+        
+        for i, suggestion in enumerate(suggestions, 1):
+            if isinstance(suggestion, dict):
+                category = suggestion.get('category', '')
+                suggestion_text = suggestion.get('suggestion', '')
+                
+                story.append(Spacer(1, 0.15 * cm))
+                if category:
+                    story.append(Paragraph(f"<b>{i}. [{category}]</b> {suggestion_text}", body_style))
+                else:
+                    story.append(Paragraph(f"<b>{i}.</b> {suggestion_text}", body_style))
+            else:
+                story.append(Paragraph(f"   • {suggestion}", body_style))
+
+    def _add_response_actions_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
+        """专门处理处置动作建议数据，以更易读的格式显示"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+        
+        if not data:
+            return
+        
+        # 处理描述
+        description = data.get('description', '')
+        if description:
+            story.append(Spacer(1, 0.2 * cm))
+            story.append(Paragraph(f"<b>描述：</b>{description}", body_style))
+        
+        # 处理应急止血动作
+        emergency_actions = data.get('emergency_actions', [])
+        if emergency_actions:
+            story.append(Spacer(1, 0.3 * cm))
+            story.append(Paragraph("<b>🚨 应急止血动作：</b>", body_style))
+            self._add_action_list_to_pdf(story, emergency_actions, body_style)
+        
+        # 处理故障排查动作
+        troubleshooting_actions = data.get('troubleshooting_actions', [])
+        if troubleshooting_actions:
+            story.append(Spacer(1, 0.3 * cm))
+            story.append(Paragraph("<b>🔍 故障排查动作：</b>", body_style))
+            self._add_action_list_to_pdf(story, troubleshooting_actions, body_style)
+        
+        # 处理恢复动作
+        recovery_actions = data.get('recovery_actions', [])
+        if recovery_actions:
+            story.append(Spacer(1, 0.3 * cm))
+            story.append(Paragraph("<b>🔧 恢复动作：</b>", body_style))
+            self._add_action_list_to_pdf(story, recovery_actions, body_style)
+    
+    def _add_action_list_to_pdf(self, story, actions: list, body_style) -> None:
+        """将动作列表以更易读的格式添加到PDF"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+        
+        for i, action in enumerate(actions, 1):
+            if isinstance(action, dict):
+                action_name = action.get('action_name', '未命名动作')
+                timing = action.get('timing', '')
+                steps = action.get('steps', '')
+                expected_effect = action.get('expected_effect', '')
+                notes = action.get('notes', '')
+                
+                story.append(Spacer(1, 0.2 * cm))
+                story.append(Paragraph(f"<b>{i}. {action_name}</b>", body_style))
+                
+                if timing:
+                    story.append(Paragraph(f"   - 时机：{timing}", body_style))
+                
+                if steps:
+                    # 处理步骤，可能是字符串或列表
+                    if isinstance(steps, list):
+                        steps_text = " → ".join(str(s) for s in steps)
+                    else:
+                        steps_text = str(steps)
+                    story.append(Paragraph(f"   - 步骤：{steps_text}", body_style))
+                
+                if expected_effect:
+                    story.append(Paragraph(f"   - 预期效果：{expected_effect}", body_style))
+                
+                if notes:
+                    story.append(Paragraph(f"   - 备注：{notes}", body_style))
+            else:
+                story.append(Paragraph(f"   • {action}", body_style))
 
     def _add_dict_table_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
         """将字典数据转换为PDF表格"""
