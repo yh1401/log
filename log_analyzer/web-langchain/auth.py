@@ -21,7 +21,7 @@ AUTH_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_USER_ID = "hanmeimei"
 DEFAULT_USERNAME = "hanmeimei"
-ADMIN_USERNAME = "admin"
+ADMIN_USERNAME = "useradmin"
 
 
 @dataclass

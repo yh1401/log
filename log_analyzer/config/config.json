@@ -1,0 +1,44 @@
+{
+  "llm": {
+    "api_url": "https://api.modelarts-maas.com/openai/v1",
+    "model_name": "qwen3-235b-a22b",
+    "api_key": "BRgV89-5SaTf8jMPzw0rxbf8rPzT2M_5CidzMAFk-ltuODZSNhhR2pXogCr4A-u9tlHiPdoTKSvzEzVCYf4H1w",
+    "backup_model": "deepseek-v3.2"
+  },
+  "processing": {
+    "chunk_size": 1000000,
+    "max_retries": 3,
+    "retry_delay": 1.0,
+    "batch_size": 100,
+    "checkpoint_interval": 1000,
+    "enable_checkpoint": true,
+    "max_workers": 4,
+    "merge_threshold": 0.8
+  },
+  "paths": {
+    "error_log_dir": "/Users/a666/Documents/trae_projects/log/loggen/data/error",
+    "output_dir": "/Users/a666/Documents/trae_projects/log/log_analyzer/reports",
+    "checkpoint_dir": "/Users/a666/Documents/trae_projects/log/log_analyzer/checkpoints",
+    "user_data_dir": "/Users/a666/Documents/trae_projects/log/log_analyzer/users"
+  },
+  "logging": {
+    "log_level": "INFO",
+    "log_format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "enable_file_logging": true
+  },
+  "app": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "debug": false,
+    "api_prefix": "/api"
+  },
+  "security": {
+    "allowed_users": ["admin001", "test_user"],
+    "max_file_size_mb": 500,
+    "max_files_per_request": 10
+  },
+  "server_path": {
+    "allowed_directories": [],
+    "max_paths": 5
+  }
+}

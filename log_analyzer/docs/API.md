@@ -1,7 +1,7 @@
-# Log Analyzer API 接口文档 (v2.2 - 简化认证版)
+# Log Analyzer API 接口文档 (v2.5 - 完整版本)
 
-> 版本: v2.2.0
-> 更新日期: 2026-06-02
+> 版本: v2.5.0
+> 更新日期: 2026-06-04
 > 基础URL: `http://localhost:8000`
 
 ---
@@ -9,6 +9,13 @@
 ## 目录
 
 1. [概述](#1-概述)
+   - [接口变更说明](#1-1-接口变更说明)
+   - [分析模式对比](#1-2-分析模式对比)
+   - [规则模式详解](#1-3-规则模式详解)
+   - [认证机制](#1-4-认证机制)
+   - [通用请求头](#1-5-通用请求头)
+   - [统一响应格式](#1-6-统一响应格式)
+   - [权限说明](#1-7-权限说明)
 2. [用户识别机制](#2-用户识别机制)
 3. [认证接口](#3-认证接口)
 4. [文件管理接口](#4-文件管理接口)
@@ -16,11 +23,11 @@
 6. [任务管理接口](#6-任务管理接口)
 7. [报告接口](#7-报告接口)
 8. [历史报告 CRUD 接口](#8-历史报告-crud-接口)
-9. [用户操作历史记录接口](#13-用户操作历史记录接口)
-10. [数据备份接口](#9-数据备份接口)
-11. [系统接口](#10-系统接口)
-12. [错误码定义](#11-错误码定义)
-13. [数据隔离与存储方案](#12-数据隔离与存储方案)
+9. [数据备份接口](#9-数据备份接口)
+10. [用户操作历史记录接口](#10-用户操作历史记录接口)
+11. [系统接口](#11-系统接口)
+12. [错误码定义](#12-错误码定义)
+13. [数据隔离与存储方案](#13-数据隔离与存储方案)
 
 ---
 
@@ -28,12 +35,59 @@
 
 ### 1.1 接口变更说明
 
-本版本对认证机制做了重大调整：
+本版本新增两项重要功能：
+
+#### 规则模式分析
+- **新增 `use_llm` 参数**：支持在 LLM 模式和规则模式间切换
+- **规则模式**：不依赖 LLM，使用预定义规则进行快速分析
+- **LLM 模式**：调用大语言模型进行深度语义分析（默认）
+
+#### 服务器路径读取（单一接口）
+- **新增 `POST /api/list-dir`**：整合目录浏览、路径验证和权限检查功能
+- **单一接口实现**：通过参数控制不同操作模式
+- **权限控制**：白名单机制，仅允许访问配置的目录
+
+### 1.2 分析模式对比
+
+| 特性 | LLM 模式 | 规则模式 |
+|------|---------|---------|
+| 语义理解 | 强，支持复杂分析 | 有限，基于规则匹配 |
+| 响应速度 | 较慢（5-30秒/1000条） | 极快（<1秒/1000条） |
+| API 成本 | 有（按调用计费） | 无（完全免费） |
+| 内存占用 | ~200MB | ~50MB |
+| 适用场景 | 复杂问题诊断、深度分析 | 快速原型、成本敏感、实时监控 |
+
+### 1.3 规则模式详解
+
+规则模式是一种轻量级的日志分析方式，不依赖大语言模型，使用预定义规则进行错误识别和分类。
+
+**核心特性：**
+- **多层次错误分类**：Critical、High、Medium、Low 四个级别
+- **根本原因识别**：自动识别空引用、资源泄漏、超时、认证问题等
+- **智能建议生成**：根据错误类型自动生成整改建议
+- **统计分析**：日志级别分布、错误类型分布、时间趋势分析
+
+**适用场景：**
+- 批量日志快速扫描
+- 日常监控告警
+- CI/CD 流水线集成
+- 成本敏感环境
+- 离线分析场景
+
+**不适用场景：**
+- 需要深度语义分析
+- 复杂跨系统问题诊断
+- 需要自然语言总结
+- 未知错误模式识别
+
+### 1.4 认证机制
+
+采用简化认证机制：
 - **移除 Token 鉴权**：不再需要登录、Token验证、登出等流程
 - **采用请求头识别用户身份**：通过 `X-User-Id` 头传递用户ID
 - **默认用户支持**：未携带头时使用 `default_user`
 
-### 1.2 通用请求头
+### 1.5 通用请求头
 
 | 请求头 | 必填 | 说明 |
 |--------|------|------|
@@ -41,7 +95,7 @@
 | `X-Username` | 否 | 用户名（用于显示，可选） |
 | `Content-Type` | 是 | `application/json` 或 `multipart/form-data` |
 
-### 1.3 统一响应格式
+### 1.6 统一响应格式
 
 ```json
 {
@@ -56,6 +110,17 @@
 | code | int | 状态码，0=成功，非0=失败 |
 | message | string | 操作结果描述 |
 | data | object/null | 响应数据 |
+
+### 1.7 权限说明
+
+**v2.5.0 权限优化**：移除了管理员权限限制，所有用户可访问以下功能：
+
+| 权限级别 | 说明 | 适用接口 |
+|----------|------|----------|
+| 公开 | 无需认证 | `/api/health` |
+| 用户级 | 需要 X-User-Id | 大部分业务接口 |
+| 数据隔离 | 用户只能访问自己的数据 | 历史报告（仅自己的）、上传文件、任务 |
+| 全局访问 | 可访问但数据隔离 | 历史报告管理、操作日志查询、操作统计 |
 
 ---
 
@@ -117,7 +182,7 @@ Content-Type: application/json
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | user_id | string | 是 | 用户业务ID |
-| username | string | 否 | 用户名 |
+| username | string | 否 | 用户名（用于显示） |
 
 **成功响应**
 ```json
@@ -153,7 +218,7 @@ X-User-Id: user_001
 }
 ```
 
-> 此接口直接读取 `X-User-Id` 请求头，无需调用 identify。
+> 此接口直接读取 `X-User-Id` 请求头，无需先调用 identify。
 
 ---
 
@@ -183,63 +248,144 @@ file: <文件>
     "message": "上传成功",
     "data": {
         "success": true,
-        "file_path": "/log_analyzer/users/user_001/uploads/example.log",
-        "file_name": "example.log",
-        "file_size": "1.23 MB",
-        "extracted_files": [
+        "file_path": "/path/to/uploaded/file.log",
+        "file_name": "error.log",
+        "file_size": "10.5 KB",
+        "extracted_files": []
+    }
+}
+```
+
+**错误响应**
+```json
+{
+    "code": 1,
+    "message": "不支持的文件类型: test.exe\n支持的类型: .log, .txt, .zip, .pcap",
+    "data": null
+}
+```
+
+### 4.2 服务器路径读取（单一接口）
+
+**请求**
+```http
+POST /api/list-dir
+X-User-Id: user_001
+Content-Type: application/json
+
+{
+    "path": "/var/log/nginx",
+    "recursive": false,
+    "file_patterns": ["*.log", "*.txt"],
+    "validate_only": true
+}
+```
+
+**参数说明**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| path | string | 是 | - | 文件或目录路径 |
+| recursive | bool | 否 | false | 是否递归读取子目录 |
+| file_patterns | array | 否 | ["*.log"] | 文件匹配模式列表 |
+| validate_only | bool | 否 | false | 是否仅验证路径（不返回完整文件列表） |
+
+**功能模式**
+
+| 参数组合 | 功能 |
+|---------|------|
+| `validate_only: true` | 路径验证模式 - 验证路径有效性和权限 |
+| `validate_only: false` | 目录浏览模式 - 返回目录内容列表 |
+| `recursive: true` | 递归读取子目录 |
+| `file_patterns: ["*.log"]` | 按通配符匹配文件 |
+
+**成功响应 - 验证模式**
+```json
+{
+    "code": 0,
+    "message": "路径验证成功",
+    "data": {
+        "path": "/var/log/nginx",
+        "is_file": false,
+        "is_directory": true,
+        "file_count": 5,
+        "files": [
             {
-                "path": "/log_analyzer/users/user_001/uploads/example.log",
-                "name": "example.log",
-                "size": "1.23 MB"
+                "name": "error.log",
+                "path": "/var/log/nginx/error.log",
+                "size": 1048576,
+                "size_str": "1.00 MB",
+                "modified": "2024-01-01T12:00:00"
             }
         ]
     }
 }
 ```
 
-### 4.2 列出目录
-
-**请求**
-```http
-GET /api/list-directory?path=/some/path
-X-User-Id: user_001
-```
-
-**参数说明**
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| path | string | 否 | 目录路径，缺省返回用户上传目录 |
-
-**成功响应**
+**成功响应 - 浏览模式**
 ```json
 {
     "code": 0,
     "message": "获取成功",
     "data": {
-        "current_path": "/log_analyzer/users/user_001/uploads",
-        "parent_path": "/log_analyzer/users/user_001",
-        "directories": [...],
-        "files": [...]
+        "current_path": "/var/log/nginx",
+        "parent_path": "/var/log",
+        "files": [
+            {
+                "name": "error.log",
+                "path": "/var/log/nginx/error.log",
+                "size": 1048576,
+                "size_str": "1.00 MB",
+                "type": "file"
+            },
+            {
+                "name": "access/",
+                "path": "/var/log/nginx/access",
+                "size": 0,
+                "size_str": "-",
+                "type": "directory"
+            }
+        ]
     }
 }
 ```
 
-### 4.3 下载文件
+**安全特性**
+- **路径遍历攻击防护**：解析绝对路径，防止 `../` 攻击
+- **白名单目录限制**：只允许访问 `/var/log`, `/opt/logs`, `/tmp`, `/home`
+- **自动权限检查**：验证系统读取权限
+- **递归深度控制**：避免在大型目录上过度递归
 
-**请求**
-```http
-GET /api/download/{file_path}
-X-User-Id: user_001
-```
+**使用模式说明**
 
-> 只能下载用户自己目录下的文件。
+| 模式 | 参数配置 | 适用场景 |
+|------|---------|---------|
+| **验证模式** | `validate_only: true` | 验证路径有效性和权限 |
+| **浏览模式** | `validate_only: false` | 浏览目录内容 |
+| **递归模式** | `recursive: true` | 读取子目录中的文件 |
+| **精确匹配** | `file_patterns: ["*.log"]` | 按通配符过滤文件 |
+
+**错误响应**
+
+| HTTP 状态码 | 错误场景 | 响应示例 |
+|------------|---------|---------|
+| 403 | 路径不在白名单 | `{"code": 1, "message": "路径 /etc 不在允许访问的目录范围内。允许的目录：/var/log, /opt/logs, /tmp, /home"}` |
+| 404 | 路径不存在 | `{"code": 1, "message": "路径不存在"}` |
+| 403 | 无读取权限 | `{"code": 1, "message": "没有读取路径 /var/log/secure 的权限"}` |
+| 500 | 服务器错误 | `{"code": 1, "message": "服务器内部错误"}` |
+
+**最佳实践**
+
+1. **先验证后处理**：使用 `validate_only: true` 先验证路径有效性
+2. **限制递归深度**：大目录建议关闭递归选项
+3. **精确文件匹配**：使用 `file_patterns` 减少返回数据量
+4. **权限检查**：确保应用进程有读取目标路径的权限
 
 ---
 
 ## 5. 日志处理接口
 
-### 5.1 开始处理
+### 5.1 开始处理日志文件
 
 **请求**
 ```http
@@ -248,20 +394,22 @@ X-User-Id: user_001
 Content-Type: application/json
 
 {
-    "file_path": "/log_analyzer/users/user_001/uploads/example.log",
+    "file_path": "/path/to/log/file.log",
     "chunk_size": 50000,
-    "force_restart": false
+    "force_restart": false,
+    "use_llm": true
 }
 ```
 
 **参数说明**
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| file_path | string | 否 | 单个文件路径 |
-| directory_path | string | 否 | 目录路径 |
-| chunk_size | int | 否 | 分块大小，默认50000 |
-| force_restart | bool | 否 | 是否强制重新处理 |
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| file_path | string | 否 | - | 单个文件路径（与 directory_path 二选一） |
+| directory_path | string | 否 | - | 目录路径（与 file_path 二选一） |
+| chunk_size | int | 否 | 50000 | 处理块大小 |
+| force_restart | bool | 否 | false | 是否强制重启已存在的任务 |
+| use_llm | bool | 否 | true | 是否使用LLM分析（false则使用规则引擎） |
 
 **成功响应**
 ```json
@@ -269,20 +417,60 @@ Content-Type: application/json
     "code": 0,
     "message": "任务已创建，正在处理 1 个文件",
     "data": {
-        "task_id": "user_001_20260601_143000_123456",
-        "status": "pending",
-        "message": "任务已创建，正在处理 1 个文件"
+        "task_id": "user_001_20260601_100000_123456",
+        "status": "pending"
     }
 }
 ```
 
-> 处理完成后，系统会自动创建历史报告记录。
+### 5.2 从服务器路径读取并处理
+
+**请求**
+```http
+POST /api/process-from-path
+X-User-Id: user_001
+Content-Type: application/json
+
+{
+    "path": "/var/log",
+    "recursive": true,
+    "file_patterns": ["*.log"]
+}
+```
+
+**参数说明**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| path | string | 是 | - | 文件或目录路径 |
+| recursive | bool | 否 | false | 是否递归读取子目录 |
+| max_file_size | int | 否 | 104857600 | 最大文件大小 |
+| file_patterns | array | 否 | null | 文件匹配模式 |
+
+**成功响应**
+```json
+{
+    "code": 0,
+    "message": "任务已创建，正在处理 3 个文件",
+    "data": {
+        "task_id": "path_user_001_20260601_100000_123456",
+        "status": "pending",
+        "file_count": 3,
+        "total_size": 31457280
+    }
+}
+```
+
+**与 /api/upload + /api/process 的区别**
+- 无需先上传文件到服务器
+- 直接从服务器指定路径读取
+- 适用于已存在于服务器上的日志文件
 
 ---
 
 ## 6. 任务管理接口
 
-### 6.1 查询任务状态
+### 6.1 获取任务状态
 
 **请求**
 ```http
@@ -290,19 +478,43 @@ GET /api/task/{task_id}
 X-User-Id: user_001
 ```
 
+**路径参数**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| task_id | string | 任务ID |
+
 **成功响应**
 ```json
 {
     "code": 0,
     "message": "获取成功",
     "data": {
-        "task_id": "user_001_20260601_143000_123456",
-        "status": "completed",
-        "progress": 100.0,
-        "message": "处理完成！共处理 3 个文件",
-        "reports": [...],
+        "task_id": "user_001_20260601_100000_123456",
+        "status": "processing",
+        "progress": 50.0,
+        "message": "正在分析日志...",
+        "reports": null,
         "error": null
     }
+}
+```
+
+**任务状态说明**
+
+| 状态 | 说明 |
+|------|------|
+| pending | 任务已创建，等待开始 |
+| processing | 正在处理 |
+| completed | 处理完成 |
+| failed | 处理失败 |
+
+**错误响应**
+```json
+{
+    "code": 1,
+    "message": "无权访问此任务",
+    "data": null
 }
 ```
 
@@ -310,7 +522,7 @@ X-User-Id: user_001
 
 ## 7. 报告接口
 
-### 7.1 获取报告文件列表
+### 7.1 获取报告列表
 
 **请求**
 ```http
@@ -326,11 +538,11 @@ X-User-Id: user_001
     "data": {
         "reports": [
             {
-                "name": "report_test.log_20260601_143000.md",
-                "path": "/log_analyzer/users/user_001/reports/report_test.log_20260601_143000.md",
-                "size": 12345,
-                "size_str": "12.05 KB",
-                "modified": "2026-06-01T14:30:00",
+                "name": "report_error.log_20260601_100000.md",
+                "path": "/path/to/report.md",
+                "size": 10240,
+                "size_str": "10.0 KB",
+                "modified": "2026-06-01T10:00:00",
                 "type": "markdown"
             }
         ]
@@ -338,84 +550,66 @@ X-User-Id: user_001
 }
 ```
 
----
-
-## 8. 历史报告 CRUD 接口
-
-> 这些接口提供持久化的报告元数据管理，独立于文件报告。数据存储在 `log_analyzer/data/reports_db/{user_id}/`。
-
-### 8.1 创建历史报告
+### 7.2 下载报告
 
 **请求**
 ```http
-POST /api/history/reports
+GET /api/report/download/{report_name}
 X-User-Id: user_001
-Content-Type: application/json
+```
 
+**路径参数**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| report_name | string | 报告文件名 |
+
+**成功响应**
+- 返回文件流，Content-Type 根据文件类型自动设置
+
+**错误响应**
+```json
 {
-    "title": "系统异常分析报告",
-    "file_name": "error.log",
-    "file_type": "log",
-    "summary": "本次共发现 12 个错误...",
-    "statistics": {
-        "total_chunks": 5,
-        "error_count": 12
-    },
-    "analysis": {
-        "key_findings": [...],
-        "suggestions": [...]
-    },
-    "files": [
-        {"name": "report.md", "type": "markdown", "path": "..."}
-    ],
-    "tags": ["urgent", "production"],
-    "metadata": {
-        "source": "auto",
-        "version": "1.0"
-    }
+    "code": 1,
+    "message": "报告不存在",
+    "data": null
 }
 ```
 
-**参数说明**
+### 7.3 删除报告
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| title | string | 是 | 报告标题 |
-| file_name | string | 是 | 源文件名 |
-| file_type | string | 否 | 文件类型，默认 log |
-| summary | string | 否 | 报告摘要 |
-| statistics | object | 否 | 统计数据 |
-| analysis | object | 否 | 分析结果 |
-| files | array | 否 | 关联文件列表 |
-| tags | array | 否 | 标签列表 |
-| metadata | object | 否 | 扩展元数据 |
+**请求**
+```http
+DELETE /api/report/{report_name}
+X-User-Id: user_001
+```
+
+**路径参数**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| report_name | string | 报告文件名 |
 
 **成功响应**
 ```json
 {
     "code": 0,
-    "message": "创建成功",
-    "data": {
-        "report_id": "rpt_20260601_143000_abc12345"
-    }
+    "message": "删除成功",
+    "data": null
 }
 ```
 
-### 8.2 查询历史报告列表
+---
+
+## 8. 历史报告 CRUD 接口
+
+### 8.1 获取历史报告列表
 
 **请求**
 ```http
-GET /api/history/reports?limit=20&offset=0&keyword=error
+GET /api/history/reports
 X-User-Id: user_001
 ```
-
-**参数说明**
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| limit | int | 否 | 返回数量限制，默认100 |
-| offset | int | 否 | 偏移量，默认0 |
-| keyword | string | 否 | 搜索关键词（标题/文件名/摘要） |
 
 **成功响应**
 ```json
@@ -425,28 +619,36 @@ X-User-Id: user_001
     "data": {
         "reports": [
             {
-                "report_id": "rpt_20260601_143000_abc12345",
-                "title": "系统异常分析报告",
+                "id": 1,
+                "user_id": "user_001",
                 "file_name": "error.log",
-                "file_type": "log",
-                "created_at": "2026-06-01T14:30:00",
-                "updated_at": "2026-06-01T14:30:00"
+                "report_path": "/path/to/report.pdf",
+                "created_at": "2026-06-01T10:00:00",
+                "status": "completed",
+                "error_count": 15,
+                "warning_count": 30
             }
         ],
-        "total": 1,
-        "limit": 20,
-        "offset": 0
+        "total": 100,
+        "page": 1,
+        "page_size": 20
     }
 }
 ```
 
-### 8.3 查询单个历史报告
+### 8.2 获取单个报告详情
 
 **请求**
 ```http
-GET /api/history/reports/{report_id}
+GET /api/history/report/{id}
 X-User-Id: user_001
 ```
+
+**路径参数**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| id | int | 报告记录ID |
 
 **成功响应**
 ```json
@@ -454,55 +656,62 @@ X-User-Id: user_001
     "code": 0,
     "message": "获取成功",
     "data": {
-        "report_id": "rpt_20260601_143000_abc12345",
+        "id": 1,
         "user_id": "user_001",
-        "title": "系统异常分析报告",
         "file_name": "error.log",
-        "file_type": "log",
-        "summary": "...",
-        "statistics": {...},
-        "analysis": {...},
-        "files": [...],
-        "tags": [...],
-        "metadata": {...},
-        "created_at": "2026-06-01T14:30:00",
-        "updated_at": "2026-06-01T14:30:00",
-        "version": 1
+        "report_path": "/path/to/report.pdf",
+        "created_at": "2026-06-01T10:00:00",
+        "status": "completed",
+        "error_count": 15,
+        "warning_count": 30,
+        "analysis_summary": "分析完成，共发现 15 个错误..."
     }
 }
 ```
 
-### 8.4 更新历史报告
+### 8.3 搜索历史报告
 
 **请求**
 ```http
-PUT /api/history/reports/{report_id}
+GET /api/history/reports/search?keyword=error&start_date=2026-06-01&end_date=2026-06-30
 X-User-Id: user_001
-Content-Type: application/json
-
-{
-    "title": "更新后的标题",
-    "summary": "更新后的摘要",
-    "tags": ["resolved", "archived"]
-}
 ```
+
+**查询参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| keyword | string | 否 | 搜索关键词 |
+| start_date | string | 否 | 开始日期（YYYY-MM-DD） |
+| end_date | string | 否 | 结束日期（YYYY-MM-DD） |
 
 **成功响应**
 ```json
 {
     "code": 0,
-    "message": "更新成功",
-    "data": null
+    "message": "获取成功",
+    "data": {
+        "reports": [...],
+        "total": 5,
+        "page": 1,
+        "page_size": 20
+    }
 }
 ```
 
-### 8.5 删除历史报告
+### 8.4 删除历史记录
 
 **请求**
 ```http
-DELETE /api/history/reports/{report_id}
+DELETE /api/history/report/{id}
 X-User-Id: user_001
 ```
+
+**路径参数**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| id | int | 报告记录ID |
 
 **成功响应**
 ```json
@@ -517,11 +726,74 @@ X-User-Id: user_001
 
 ## 9. 数据备份接口
 
-### 9.1 创建数据备份
+### 9.1 导出用户数据
 
 **请求**
 ```http
-POST /api/backup/create
+POST /api/backup/export
+X-User-Id: user_001
+Content-Type: application/json
+
+{
+    "include_reports": true,
+    "include_checkpoints": false
+}
+```
+
+**参数说明**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| include_reports | bool | 否 | true | 是否包含报告文件 |
+| include_checkpoints | bool | 否 | false | 是否包含检查点数据 |
+
+**成功响应**
+```json
+{
+    "code": 0,
+    "message": "导出成功",
+    "data": {
+        "backup_path": "/path/to/backup.zip",
+        "file_count": 15,
+        "total_size": 10485760,
+        "total_size_str": "10.0 MB"
+    }
+}
+```
+
+### 9.2 导入用户数据
+
+**请求**
+```http
+POST /api/backup/import
+X-User-Id: user_001
+Content-Type: multipart/form-data
+
+file: <backup.zip>
+```
+
+**成功响应**
+```json
+{
+    "code": 0,
+    "message": "导入成功",
+    "data": {
+        "imported_files": 15,
+        "imported_reports": 10,
+        "imported_checkpoints": 5
+    }
+}
+```
+
+---
+
+## 10. 用户操作历史记录接口
+
+### 10.1 获取操作记录列表
+
+**请求**
+```http
+GET /api/history/actions
 X-User-Id: user_001
 ```
 
@@ -529,201 +801,75 @@ X-User-Id: user_001
 ```json
 {
     "code": 0,
-    "message": "备份成功",
+    "message": "获取成功",
     "data": {
-        "backup_path": "/log_analyzer/data/backups/user_001_20260601_143000"
+        "actions": [
+            {
+                "id": 1,
+                "user_id": "user_001",
+                "action_type": "upload",
+                "action_desc": "上传文件 error.log",
+                "created_at": "2026-06-01T10:00:00"
+            }
+        ],
+        "total": 100,
+        "page": 1,
+        "page_size": 20
+    }
+}
+```
+
+### 10.2 获取操作类型统计
+
+**请求**
+```http
+GET /api/history/actions/stats
+X-User-Id: user_001
+```
+
+**成功响应**
+```json
+{
+    "code": 0,
+    "message": "获取成功",
+    "data": {
+        "upload": 50,
+        "process": 45,
+        "download": 30,
+        "delete": 5
     }
 }
 ```
 
 ---
 
-## 10. 系统接口
+## 11. 系统接口
 
-### 10.1 健康检查
+### 11.1 健康检查
 
 **请求**
 ```http
 GET /api/health
 ```
 
-**响应**
-```json
-{
-    "status": "ok",
-    "message": "Log Analyzer API is running"
-}
-```
-
----
-
-## 11. 错误码定义
-
-### 11.1 业务错误码
-
-| code | message | 说明 |
-|------|---------|------|
-| 0 | 成功 | 操作成功 |
-| 1 | 操作失败 | 通用错误码 |
-
-### 11.2 错误消息字典
-
-| code | message | 说明 |
-|------|---------|------|
-| 1 | 不支持的文件类型 | 上传文件类型不符 |
-| 1 | 文件不存在 | 文件路径不存在 |
-| 1 | 目录不存在 | 目录路径不存在 |
-| 1 | 未找到可处理的日志文件 | 指定路径下无日志文件 |
-| 1 | 任务不存在 | task_id无效 |
-| 1 | 报告不存在 | report_id无效 |
-| 1 | 无权访问此文件 | 跨用户访问文件 |
-
----
-
-## 12. 数据隔离与存储方案
-
-### 12.1 本地文件存储结构
-
-```
-log_analyzer/
-├── users/                          # 用户文件目录
-│   └── {user_id}/
-│       ├── uploads/                # 用户上传文件
-│       ├── reports/                # 用户报告文件（md/html/pdf/docx）
-│       └── checkpoints/            # 用户检查点
-│
-├── data/                           # 用户数据存储目录
-│   ├── reports_db/                 # 历史报告数据库（文件版）
-│   │   └── {user_id}/
-│   │       ├── {report_id}.json   # 单个报告完整数据
-│   │       └── _index.json        # 用户报告索引
-│   │
-│   └── backups/                    # 数据备份
-│       └── {user_id}_{timestamp}/
-│           └── data/...
-│
-└── auth/
-    └── users.json                  # 用户档案
-```
-
-### 12.2 数据隔离机制
-
-所有业务接口都基于 `X-User-Id` 请求头识别用户身份，确保：
-
-1. **文件存储隔离**: 每个用户的文件存储在 `users/{user_id}/` 目录下
-2. **报告数据隔离**: 历史报告按 `user_id` 字段隔离存储
-3. **下载权限隔离**: 用户只能下载 `users/{user_id}/` 目录下的文件
-4. **备份隔离**: 每个用户的数据独立备份
-
-### 12.3 数据库迁移准备
-
-当前使用 `FileReportStorage` 实现，支持平滑迁移到数据库：
-
-```python
-# 切换存储后端
-export STORAGE_TYPE=database
-export DATABASE_URL=postgresql://user:pass@localhost/log_analyzer
-```
-
-`DatabaseReportStorage` 已预留接口，详见 [docs/table_schema.md](table_schema.md)。
-
-### 12.4 抽象接口
-
-```python
-class ReportStorage(ABC):
-    def create(self, user_id, report_data) -> str
-    def get(self, user_id, report_id) -> Optional[Dict]
-    def list(self, user_id, limit, offset) -> List[Dict]
-    def update(self, user_id, report_id, data) -> bool
-    def delete(self, user_id, report_id) -> bool
-    def search(self, user_id, keyword, limit) -> List[Dict]
-```
-
----
-
-## 13. 用户操作历史记录接口
-
-### 13.1 概述
-
-用户操作历史记录功能用于记录用户在系统中的所有关键操作行为，包括页面访问、按钮点击、API请求等交互行为，形成完整的用户使用轨迹。
-
-### 13.2 操作类型定义
-
-| 类型 | 说明 |
-|------|------|
-| `page_view` | 页面访问 |
-| `button_click` | 按钮点击 |
-| `api_request` | API请求 |
-| `file_upload` | 文件上传 |
-| `file_download` | 文件下载 |
-| `report_view` | 报告查看 |
-| `task_start` | 任务开始 |
-| `task_complete` | 任务完成 |
-| `task_failed` | 任务失败 |
-| `user_login` | 用户登录 |
-| `user_logout` | 用户登出 |
-
-### 13.3 查询操作历史记录
-
-**请求**
-```http
-POST /api/history/actions
-X-User-Id: user_001
-Content-Type: application/json
-
-{
-    "start_time": "2026-06-01T00:00:00",
-    "end_time": "2026-06-30T23:59:59",
-    "action_type": "api_request",
-    "limit": 20,
-    "offset": 0
-}
-```
-
-**参数说明**
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| start_time | string | 否 | 开始时间（ISO格式） |
-| end_time | string | 否 | 结束时间（ISO格式） |
-| action_type | string | 否 | 操作类型筛选 |
-| limit | int | 否 | 返回数量限制，默认100 |
-| offset | int | 否 | 偏移量，默认0 |
-
 **成功响应**
 ```json
 {
     "code": 0,
-    "message": "获取成功",
+    "message": "OK",
     "data": {
-        "records": [
-            {
-                "action_id": "act_20260602_100000_abc123",
-                "user_id": "user_001",
-                "action_type": "api_request",
-                "action_name": "POST /api/process",
-                "resource": "/api/process",
-                "details": {
-                    "method": "POST",
-                    "status_code": 200
-                },
-                "timestamp": "2026-06-02T10:00:00",
-                "duration_ms": 1500,
-                "status": "success"
-            }
-        ],
-        "total": 150,
-        "limit": 20,
-        "offset": 0
+        "status": "healthy",
+        "timestamp": "2026-06-01T10:00:00",
+        "version": "2.5.0"
     }
 }
 ```
 
-### 13.4 获取单条操作记录
+### 11.2 获取系统配置
 
 **请求**
 ```http
-GET /api/history/actions/{action_id}
+GET /api/system/config
 X-User-Id: user_001
 ```
 
@@ -733,163 +879,58 @@ X-User-Id: user_001
     "code": 0,
     "message": "获取成功",
     "data": {
-        "action_id": "act_20260602_100000_abc123",
-        "user_id": "user_001",
-        "action_type": "file_upload",
-        "action_name": "上传文件: error.log",
-        "resource": "error.log",
-        "details": {"file_size": 123456},
-        "timestamp": "2026-06-02T10:00:00",
-        "duration_ms": 0,
-        "status": "success"
-    }
-}
-```
-
-### 13.5 删除单条操作记录
-
-**请求**
-```http
-DELETE /api/history/actions/{action_id}
-X-User-Id: user_001
-```
-
-**成功响应**
-```json
-{
-    "code": 0,
-    "message": "删除成功",
-    "data": null
-}
-```
-
-### 13.6 清理历史记录
-
-**请求**
-```http
-DELETE /api/history/actions/cleanup?before_time=2026-01-01T00:00:00
-X-User-Id: user_001
-```
-
-**参数说明**
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| before_time | string | 是 | 删除此时间之前的所有记录 |
-
-**成功响应**
-```json
-{
-    "code": 0,
-    "message": "清理成功",
-    "data": {"deleted_count": 50}
-}
-```
-
-### 13.7 统计操作记录数
-
-**请求**
-```http
-GET /api/history/actions/count
-X-User-Id: user_001
-```
-
-**成功响应**
-```json
-{
-    "code": 0,
-    "message": "获取成功",
-    "data": {"count": 150}
-}
-```
-
-### 13.8 获取操作类型列表
-
-**请求**
-```http
-GET /api/history/actions/types
-```
-
-**成功响应**
-```json
-{
-    "code": 0,
-    "message": "获取成功",
-    "data": {
-        "types": ["page_view", "button_click", "api_request", ...],
-        "description": {
-            "page_view": "页面访问",
-            "button_click": "按钮点击",
-            "api_request": "API请求",
-            "file_upload": "文件上传",
-            "file_download": "文件下载",
-            "report_view": "报告查看",
-            "task_start": "任务开始",
-            "task_complete": "任务完成",
-            "task_failed": "任务失败",
-            "user_login": "用户登录",
-            "user_logout": "用户登出"
-        }
+        "max_file_size_mb": 500,
+        "max_files_per_request": 10,
+        "supported_formats": ["pdf", "word", "md"]
     }
 }
 ```
 
 ---
 
-## 14. 附录
+## 12. 错误码定义
 
-### A. 前端调用示例
-
-```javascript
-const API_BASE = 'http://localhost:8000';
-const USER_ID = 'user_001';
-
-const headers = {
-    'Content-Type': 'application/json',
-    'X-User-Id': USER_ID
-};
-
-// 创建历史报告
-async function createReport(data) {
-    return fetch(`${API_BASE}/api/history/reports`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(data)
-    }).then(r => r.json());
-}
-
-// 查询历史报告
-async function listReports(keyword = '') {
-    return fetch(`${API_BASE}/api/history/reports?keyword=${keyword}`, {
-        headers
-    }).then(r => r.json());
-}
-
-// 更新历史报告
-async function updateReport(reportId, data) {
-    return fetch(`${API_BASE}/api/history/reports/${reportId}`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify(data)
-    }).then(r => r.json());
-}
-
-// 删除历史报告
-async function deleteReport(reportId) {
-    return fetch(`${API_BASE}/api/history/reports/${reportId}`, {
-        method: 'DELETE',
-        headers
-    }).then(r => r.json());
-}
-```
-
-### B. 相关文档
-
-- [API 详细设计](API.md)
-- [数据库表结构](table_schema.md)
-- [项目 README](../README.md)
+| 错误码 | HTTP 状态码 | 说明 |
+|--------|------------|------|
+| 0 | 200 | 成功 |
+| 1 | 400 | 请求参数错误 |
+| 2 | 401 | 未授权 |
+| 3 | 403 | 权限不足 |
+| 4 | 404 | 资源不存在 |
+| 5 | 500 | 服务器内部错误 |
+| 100 | - | 文件上传失败 |
+| 101 | - | 文件类型不支持 |
+| 102 | - | 文件大小超限 |
+| 200 | - | 任务不存在 |
+| 201 | - | 任务已存在 |
+| 300 | - | 报告生成失败 |
+| 400 | - | 路径不在白名单范围内（服务器路径读取） |
+| 401 | - | 路径不存在（服务器路径读取） |
+| 402 | - | 没有读取路径权限（服务器路径读取） |
 
 ---
 
-*文档版本: v2.0.0*
-*最后更新: 2026-06-01*
+## 13. 数据隔离与存储方案
+
+### 13.1 存储结构
+
+```
+users/
+├── {user_id}/
+│   ├── uploads/           # 上传的文件
+│   ├── reports/           # 生成的报告
+│   ├── checkpoints/       # 断点续传检查点
+│   └── data/              # 用户数据
+```
+
+### 13.2 隔离机制
+
+- **目录隔离**：每个用户拥有独立的目录
+- **文件名隔离**：文件名包含 user_id 前缀
+- **数据库隔离**：所有查询都带 user_id 条件
+
+### 13.3 安全措施
+
+- 文件权限：仅应用进程可读写
+- 敏感数据：不存储明文密码或密钥
+- 日志审计：记录所有操作日志

@@ -1,0 +1,28 @@
+{
+  "task_id": "path_admin001_20260604_030832_378172",
+  "user_id": "admin001",
+  "status": "completed",
+  "progress": 100.0,
+  "message": "\u5904\u7406\u5b8c\u6210\uff01\u6210\u529f\u5904\u7406 1/1 \u4e2a\u6587\u4ef6",
+  "file_count": 1,
+  "total_size": 1525642,
+  "start_time": "2026-06-04T03:08:32.378249",
+  "source": "path",
+  "source_path": "/Users/a666/Documents/trae_projects/log/log_analyzer/logfile/data/pcap",
+  "files": [
+    "/Users/a666/Documents/trae_projects/log/log_analyzer/logfile/data/pcap/192.168.169.234-reboot-device.pcap"
+  ],
+  "reports": [
+    {
+      "name": "report_path_192.168.169.234-reboot-device_20260604_030848.json",
+      "path": "/Users/a666/Documents/trae_projects/log/log_analyzer/users/admin001/reports/report_path_192.168.169.234-reboot-device_20260604_030848.json",
+      "type": "json"
+    },
+    {
+      "name": "report_path_192.168.169.234-reboot-device_20260604_030848.md",
+      "path": "/Users/a666/Documents/trae_projects/log/log_analyzer/users/admin001/reports/report_path_192.168.169.234-reboot-device_20260604_030848.md",
+      "type": "markdown"
+    }
+  ],
+  "end_time": "2026-06-04T03:08:48.456470"
+}

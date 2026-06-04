@@ -66,14 +66,15 @@ class ChunkProcessor:
     def __init__(
         self,
         parser: LogParser,
-        llm_client: LLMClient,
+        llm_client: Optional[LLMClient],
         checkpoint_manager: CheckpointManager,
         chunk_size: int = 10000,
         enable_checkpoint: bool = True,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         parallel_workers: int = 4,
         enable_parallel_processing: bool = True,
-        merge_threshold: int = 5
+        merge_threshold: int = 5,
+        use_llm: bool = True
     ):
         self.parser = parser
         self.llm_client = llm_client
@@ -84,9 +85,13 @@ class ChunkProcessor:
         self.parallel_workers = parallel_workers
         self.enable_parallel_processing = enable_parallel_processing
         self.merge_threshold = merge_threshold
+        self.use_llm = use_llm
         
         self._checkpoint_batch = []
         self._checkpoint_batch_size = 5
+        
+        # 初始化规则分析器（当 use_llm=False 时使用）
+        self._rule_based_analyzer = None
 
         logger.info("=" * 80)
         logger.info("[ChunkProcessor] 初始化完成")
@@ -95,6 +100,9 @@ class ChunkProcessor:
         logger.info(f"  Parallel Workers: {parallel_workers}")
         logger.info(f"  Parallel Processing: {enable_parallel_processing}")
         logger.info(f"  Merge Threshold: {merge_threshold}")
+        logger.info(f"  Use LLM: {use_llm}")
+        if not use_llm:
+            logger.info("  ⚠️  警告: 使用规则模式，不调用LLM")
         logger.info("=" * 80)
 
     def count_lines(self, file_path: str) -> int:
@@ -112,6 +120,20 @@ class ChunkProcessor:
     ) -> AnalysisResult:
         logger.info(f"[Processor] 开始处理 Chunk #{chunk_id}")
         logger.info(f"  Total Entries: {len(entries)}")
+        
+        # 根据配置选择使用 LLM 或规则分析
+        if self.use_llm and self.llm_client:
+            return await self._process_chunk_with_llm(entries, chunk_id)
+        else:
+            return await self._process_chunk_with_rules(entries, chunk_id)
+    
+    async def _process_chunk_with_llm(
+        self,
+        entries: List[ParsedLogEntry],
+        chunk_id: int
+    ) -> AnalysisResult:
+        """使用 LLM 进行日志分析"""
+        logger.info(f"[Processor] 使用 LLM 模式处理 Chunk #{chunk_id}")
 
         error_entries = [
             e.to_dict() for e in entries
@@ -135,10 +157,56 @@ class ChunkProcessor:
         logger.info(f"  Summary: {result.summary[:100] if result.summary else 'N/A'}...")
 
         return result
+    
+    async def _process_chunk_with_rules(
+        self,
+        entries: List[ParsedLogEntry],
+        chunk_id: int
+    ) -> AnalysisResult:
+        """使用规则引擎进行日志分析（不依赖 LLM）"""
+        logger.info(f"[Processor] 使用规则模式处理 Chunk #{chunk_id}")
 
-    def process_chunk_sync_wrapper(self, args: Tuple[List[ParsedLogEntry], int, LogParser, Dict]) -> AnalysisResult:
-        entries, chunk_id, parser, llm_config = args
+        # 初始化规则分析器（延迟初始化）
+        if self._rule_based_analyzer is None:
+            from ..report.rule_based_analyzer import RuleBasedAnalyzer
+            self._rule_based_analyzer = RuleBasedAnalyzer(self.parser)
+            logger.info("[Processor] 规则分析器初始化完成")
+
+        error_entries = [
+            e for e in entries
+            if e.level == LogLevel.ERROR or e.level == LogLevel.FATAL
+        ]
+
+        logger.info(f"  Error Entries: {len(error_entries)}")
+
+        # 使用规则分析器处理日志条目
+        rule_result = self._rule_based_analyzer.analyze_entries(entries, chunk_id)
         
+        # 转换为 AnalysisResult 格式
+        result = rule_result.to_analysis_result()
+
+        logger.info(f"[Processor] Chunk #{chunk_id} 规则分析完成")
+        logger.info(f"  Summary: {result.summary[:100] if result.summary else 'N/A'}...")
+
+        return result
+
+    def process_chunk_sync_wrapper(self, args: Tuple[List[ParsedLogEntry], int, LogParser, Dict, bool]) -> AnalysisResult:
+        """同步包装器，支持可选 LLM 模式"""
+        entries, chunk_id, parser, llm_config, use_llm = args
+        
+        if use_llm and llm_config:
+            return self._process_chunk_sync_with_llm(entries, chunk_id, parser, llm_config)
+        else:
+            return self._process_chunk_sync_with_rules(entries, chunk_id, parser)
+    
+    def _process_chunk_sync_with_llm(
+        self, 
+        entries: List[ParsedLogEntry], 
+        chunk_id: int, 
+        parser: LogParser,
+        llm_config: Dict
+    ) -> AnalysisResult:
+        """使用 LLM 进行同步日志分析"""
         error_entries = [
             e.to_dict() for e in entries
             if e.level == LogLevel.ERROR or e.level == LogLevel.FATAL
@@ -157,6 +225,22 @@ class ChunkProcessor:
             return result
         except Exception as e:
             logger.error(f"[Processor] Chunk #{chunk_id} 处理失败: {e}")
+            return AnalysisResult(chunk_id=chunk_id, summary="", key_errors=[])
+    
+    def _process_chunk_sync_with_rules(
+        self, 
+        entries: List[ParsedLogEntry], 
+        chunk_id: int, 
+        parser: LogParser
+    ) -> AnalysisResult:
+        """使用规则引擎进行同步日志分析（不依赖 LLM）"""
+        try:
+            from ..report.rule_based_analyzer import RuleBasedAnalyzer
+            analyzer = RuleBasedAnalyzer(parser)
+            rule_result = analyzer.analyze_entries(entries, chunk_id)
+            return rule_result.to_analysis_result()
+        except Exception as e:
+            logger.error(f"[Processor] Chunk #{chunk_id} 规则分析失败: {e}")
             return AnalysisResult(chunk_id=chunk_id, summary="", key_errors=[])
 
     async def process_file_async(
@@ -296,56 +380,81 @@ class ChunkProcessor:
             total_chunks_count = len(all_chunks)
             
             if total_chunks_count <= self.merge_threshold:
-                logger.info(f"[Process File] 分块数 {total_chunks_count} <= 合并阈值 {self.merge_threshold}，执行合并分析策略")
-                logger.info(f"[Process File] 将所有 {total_chunks_count} 个分块的统计信息合并后进行单次LLM调用")
-                
-                all_error_entries = []
-                all_chunk_statistics = []
-                
-                for entries, cid, end_line in all_chunks:
-                    error_entries = [
-                        e.to_dict() for e in entries
-                        if e.level == LogLevel.ERROR or e.level == LogLevel.FATAL
-                    ]
-                    all_error_entries.extend(error_entries)
+                if self.use_llm and self.llm_client:
+                    logger.info(f"[Process File] 分块数 {total_chunks_count} <= 合并阈值 {self.merge_threshold}，执行合并分析策略")
+                    logger.info(f"[Process File] 将所有 {total_chunks_count} 个分块的统计信息合并后进行单次LLM调用")
                     
-                    statistics = self.parser.get_error_statistics(entries)
-                    statistics['chunk_id'] = cid
-                    all_chunk_statistics.append(statistics)
-                
-                logger.info(f"[Process File] 合并后总错误条目数: {len(all_error_entries)}")
-                logger.info(f"[Process File] 合并后统计信息数: {len(all_chunk_statistics)}")
-                
-                merged_result = await self.llm_client.analyze_merged_chunks(
-                    all_error_entries=all_error_entries,
-                    all_statistics=all_chunk_statistics,
-                    total_chunks=total_chunks_count
-                )
-                
-                merged_result.chunk_id = 0
-                
-                for entries, cid, end_line in all_chunks:
-                    chunk_results[cid] = (merged_result, end_line)
+                    all_error_entries = []
+                    all_chunk_statistics = []
+                    
+                    for entries, cid, end_line in all_chunks:
+                        error_entries = [
+                            e.to_dict() for e in entries
+                            if e.level == LogLevel.ERROR or e.level == LogLevel.FATAL
+                        ]
+                        all_error_entries.extend(error_entries)
+                        
+                        statistics = self.parser.get_error_statistics(entries)
+                        statistics['chunk_id'] = cid
+                        all_chunk_statistics.append(statistics)
+                    
+                    logger.info(f"[Process File] 合并后总错误条目数: {len(all_error_entries)}")
+                    logger.info(f"[Process File] 合并后统计信息数: {len(all_chunk_statistics)}")
+                    
+                    merged_result = await self.llm_client.analyze_merged_chunks(
+                        all_error_entries=all_error_entries,
+                        all_statistics=all_chunk_statistics,
+                        total_chunks=total_chunks_count
+                    )
+                    
+                    merged_result.chunk_id = 0
+                    
+                    for entries, cid, end_line in all_chunks:
+                        chunk_results[cid] = (merged_result, end_line)
+                else:
+                    logger.info(f"[Process File] 使用规则模式处理 {total_chunks_count} 个分块")
+                    for entries, cid, end_line in all_chunks:
+                        chunk_result = await self._process_chunk_with_rules(entries, cid)
+                        chunk_results[cid] = (chunk_result, end_line)
             
             elif self.enable_parallel_processing and total_chunks_count > 1:
-                logger.info(f"[Process File] 使用并行处理模式，{self.parallel_workers} 个并发连接")
-                
-                chunks_data = []
-                for entries, cid, end_line in all_chunks:
-                    error_entries = [
-                        e.to_dict() for e in entries
-                        if e.level == LogLevel.ERROR or e.level == LogLevel.FATAL
+                if self.use_llm and self.llm_client:
+                    logger.info(f"[Process File] 使用并行处理模式，{self.parallel_workers} 个并发连接")
+                    
+                    chunks_data = []
+                    for entries, cid, end_line in all_chunks:
+                        error_entries = [
+                            e.to_dict() for e in entries
+                            if e.level == LogLevel.ERROR or e.level == LogLevel.FATAL
+                        ]
+                        statistics = self.parser.get_error_statistics(entries)
+                        chunks_data.append((cid, error_entries, statistics))
+                    
+                    analysis_results = await self.llm_client.batch_analyze(
+                        chunks_data=chunks_data,
+                        max_concurrent=self.parallel_workers
+                    )
+                    
+                    for i, (entries, cid, end_line) in enumerate(all_chunks):
+                        chunk_results[cid] = (analysis_results[i], end_line)
+                else:
+                    logger.info(f"[Process File] 使用并行处理模式（规则模式），{self.parallel_workers} 个并发连接")
+                    import asyncio
+                    semaphore = asyncio.Semaphore(self.parallel_workers)
+                    
+                    async def process_with_rules(entries, cid, end_line):
+                        async with semaphore:
+                            result = await self._process_chunk_with_rules(entries, cid)
+                            return (cid, result, end_line)
+                    
+                    tasks = [
+                        process_with_rules(entries, cid, end_line) 
+                        for entries, cid, end_line in all_chunks
                     ]
-                    statistics = self.parser.get_error_statistics(entries)
-                    chunks_data.append((cid, error_entries, statistics))
-                
-                analysis_results = await self.llm_client.batch_analyze(
-                    chunks_data=chunks_data,
-                    max_concurrent=self.parallel_workers
-                )
-                
-                for i, (entries, cid, end_line) in enumerate(all_chunks):
-                    chunk_results[cid] = (analysis_results[i], end_line)
+                    
+                    results = await asyncio.gather(*tasks)
+                    for cid, result, end_line in results:
+                        chunk_results[cid] = (result, end_line)
             else:
                 chunk_id = start_chunk_id
                 for entries, cid, end_line in all_chunks:

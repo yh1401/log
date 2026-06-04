@@ -258,7 +258,109 @@ def detect_provider(api_url: str) -> str:
     return "openai"
 ```
 
-### 3.3 报告生成扩展（report/）
+### 3.3 智能错误合并扩展（report/）
+
+**场景**：扩展错误合并策略、自定义相似度算法、添加新的模式提取规则
+
+#### 步骤 1：自定义合并配置
+
+```python
+from report.error_merger import MergeConfig, ErrorMerger
+
+# 创建自定义配置
+custom_config = MergeConfig(
+    semantic_similarity_threshold=0.7,
+    max_examples_per_group=10,
+    max_groups=30,
+    enable_semantic_merging=True,
+    merge_by_error_type=True,
+    merge_by_message_pattern=True
+)
+
+# 使用配置
+merger = ErrorMerger(custom_config)
+merged_errors = merger.merge_errors(errors)
+```
+
+#### 步骤 2：扩展模式提取规则
+
+```python
+class CustomErrorMerger(ErrorMerger):
+    def extract_pattern(self, message: str) -> str:
+        pattern = super().extract_pattern(message)
+        
+        # 添加自定义模式提取规则
+        # 移除时间戳格式
+        pattern = re.sub(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', '[TIME]', pattern)
+        # 移除邮箱地址
+        pattern = re.sub(r'[\w.-]+@[\w.-]+\.\w+', '[EMAIL]', pattern)
+        # 移除电话号码
+        pattern = re.sub(r'1[3-9]\d{9}', '[PHONE]', pattern)
+        
+        return pattern
+```
+
+#### 步骤 3：自定义相似度算法
+
+```python
+class CustomErrorMerger(ErrorMerger):
+    def calculate_string_similarity(self, str1: str, str2: str) -> float:
+        # 使用 difflib 的 SequenceMatcher
+        from difflib import SequenceMatcher
+        return SequenceMatcher(None, str1, str2).ratio()
+```
+
+#### 步骤 4：自定义合并逻辑
+
+```python
+class CustomErrorMerger(ErrorMerger):
+    def is_similar_error(self, error1: Dict[str, Any], error2: Dict[str, Any]) -> bool:
+        # 先检查默认规则
+        if super().is_similar_error(error1, error2):
+            return True
+        
+        # 添加自定义相似度规则
+        # 例如：基于错误发生时间的相似性
+        time1 = error1.get('timestamp', '')
+        time2 = error2.get('timestamp', '')
+        if time1 and time2 and time1[:10] == time2[:10]:  # 同一天
+            return True
+        
+        return False
+```
+
+#### 预设配置
+
+模块提供三种预设配置：
+
+```python
+from report.error_merger import DEFAULT_CONFIG, STRICT_CONFIG, LENIENT_CONFIG
+
+# 默认配置
+merger = ErrorMerger(DEFAULT_CONFIG)
+
+# 严格配置（只合并完全相同的错误）
+merger = ErrorMerger(STRICT_CONFIG)
+
+# 宽松配置（更多合并）
+merger = ErrorMerger(LENIENT_CONFIG)
+```
+
+#### 单元测试
+
+参考 `tests/test_intelligent_error_merger.py`：
+
+```python
+class TestCustomMerger(unittest.TestCase):
+    def test_custom_pattern_extraction(self):
+        merger = CustomErrorMerger()
+        message = "Error at 2026-06-01 10:00:00 user@example.com"
+        pattern = merger.extract_pattern(message)
+        self.assertIn('[TIME]', pattern)
+        self.assertIn('[EMAIL]', pattern)
+```
+
+### 3.4 报告生成扩展（report/）
 
 **场景**：添加新的报告格式（如 Excel）
 

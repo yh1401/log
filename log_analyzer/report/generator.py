@@ -3,13 +3,653 @@
 import os
 import json
 import logging
+import importlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
+import markdown
+from docx import Document
+from docx.shared import Pt, RGBColor, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_ALIGN_VERTICAL
+
 from ..processor.chunk_processor import ProcessingResult
 from ..llm.client import AnalysisResult
 from ..utils.helpers import ensure_dir, get_file_size_str
+from .error_merger import ErrorMerger, MergeConfig
+
+
+def _get_weasyprint():
+    """延迟加载 WeasyPrint，避免启动时的依赖问题"""
+    try:
+        weasyprint = importlib.import_module('weasyprint')
+        return weasyprint.HTML
+    except ImportError:
+        return None
+
+
+def markdown_to_html(content: str) -> str:
+    """
+    使用 python-markdown 库将 Markdown 转换为 HTML。
+    支持完整的 Markdown 语法，包括：
+    - 标题：#、##、### 等
+    - 列表：有序和无序列表
+    - 粗体/斜体：**、*
+    - 代码块和行内代码
+    - 链接和图片
+    - 表格
+    - 引用块等
+    
+    Args:
+        content: Markdown 格式的文本内容
+        
+    Returns:
+        HTML 格式的文本内容
+    """
+    if not content:
+        return ""
+    
+    # 使用 python-markdown 进行转换
+    # extensions 参数添加额外功能支持
+    return markdown.markdown(content, extensions=['tables', 'fenced_code', 'sane_lists'])
+
+
+def _create_apple_style_table(doc, data, headers):
+    """
+    创建苹果风格的表格
+    """
+    rows = len(data) + 1  # +1 for header
+    cols = len(headers)
+    
+    table = doc.add_table(rows=rows, cols=cols)
+    table.style = 'Table Grid'
+    table.autofit = False
+    
+    # 设置列宽
+    for col in table.columns:
+        col.width = Cm(7 / cols)  # 平均分配宽度
+    
+    # 设置表头样式
+    hdr_cells = table.rows[0].cells
+    for i, header in enumerate(headers):
+        cell = hdr_cells[i]
+        cell.text = header
+        for paragraph in cell.paragraphs:
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in paragraph.runs:
+                run.font.name = 'SF Pro Display'
+                run.font.size = Pt(10)
+                run.bold = True
+                run.font.color.rgb = RGBColor(77, 77, 77)
+                run.font.underline = True
+    
+    # 设置数据行样式
+    for row_idx, row_data in enumerate(data):
+        row = table.rows[row_idx + 1]
+        for col_idx, cell_value in enumerate(row_data):
+            cell = row.cells[col_idx]
+            cell.text = str(cell_value)
+            for paragraph in cell.paragraphs:
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                paragraph.space_after = Pt(6)
+                for run in paragraph.runs:
+                    run.font.name = 'SF Pro Display'
+                    run.font.size = Pt(10)
+                    run.font.color.rgb = RGBColor(51, 51, 51)
+    
+    return table
+
+
+def _format_json_to_table(doc, json_str, table_name):
+    """
+    将JSON格式的字符串转换为结构化表格
+    """
+    import json as json_module
+    
+    try:
+        # 尝试解析JSON
+        data = json_module.loads(json_str)
+        
+        if isinstance(data, list):
+            # 如果是列表，提取公共字段作为表头
+            if data and isinstance(data[0], dict):
+                headers = list(data[0].keys())
+                rows = []
+                for item in data:
+                    row = []
+                    for header in headers:
+                        value = item.get(header, '')
+                        # 处理嵌套结构
+                        if isinstance(value, dict):
+                            value = json_module.dumps(value, ensure_ascii=False)[:50] + '...' if len(str(value)) > 50 else json_module.dumps(value, ensure_ascii=False)
+                        elif isinstance(value, list):
+                            value = str(value)[:50] + '...' if len(str(value)) > 50 else str(value)
+                        row.append(str(value))
+                    rows.append(row)
+                
+                # 添加表格名称
+                p = doc.add_paragraph()
+                run = p.add_run(f"**{table_name}**")
+                run.font.name = 'SF Pro Display'
+                run.font.size = Pt(11)
+                run.bold = True
+                
+                # 创建表格
+                _create_apple_style_table(doc, rows, headers)
+                
+                # 添加空行
+                doc.add_paragraph()
+                return True
+        
+        elif isinstance(data, dict):
+            # 如果是字典，转换为两列表格
+            rows = []
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    value = json_module.dumps(value, ensure_ascii=False)[:80] + '...' if len(str(value)) > 80 else json_module.dumps(value, ensure_ascii=False)
+                elif isinstance(value, list):
+                    value = str(value)[:80] + '...' if len(str(value)) > 80 else str(value)
+                rows.append([key, str(value)])
+            
+            # 添加表格名称
+            p = doc.add_paragraph()
+            run = p.add_run(f"**{table_name}**")
+            run.font.name = 'SF Pro Display'
+            run.font.size = Pt(11)
+            run.bold = True
+            
+            # 创建表格
+            _create_apple_style_table(doc, rows, ['字段', '值'])
+            
+            # 添加空行
+            doc.add_paragraph()
+            return True
+    
+    except (json_module.JSONDecodeError, ValueError):
+        pass
+    
+    return False
+
+
+def markdown_to_docx(content: str, output_path: str) -> None:
+    """
+    将 Markdown 内容转换为 Word 文档（.docx）。
+    采用苹果公司官网风格设计。
+    
+    支持的格式：
+    - 标题：#、##、###、####
+    - 无序列表：- 开头的行
+    - 有序列表：1.、2. 等开头的行
+    - 粗体：**text**
+    - 斜体：*text*
+    - 行内代码：`code`
+    - 表格：Markdown 表格格式
+    - 引用块：> 开头的行
+    - JSON数据自动转换为表格
+    - 换行符
+    """
+    doc = Document()
+    
+    # 设置默认样式（苹果风格）
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'SF Pro Display'
+    font.size = Pt(11)
+    font.color.rgb = RGBColor(51, 51, 51)
+    style.paragraph_format.line_spacing = 1.6
+    style.paragraph_format.space_after = Pt(10)
+    
+    # 设置标题样式
+    for level in range(1, 5):
+        heading_style = doc.styles[f'Heading {level}']
+        heading_font = heading_style.font
+        heading_font.name = 'SF Pro Display'
+        heading_font.color.rgb = RGBColor(30, 30, 30)
+        heading_font.bold = True
+        heading_style.paragraph_format.space_before = Pt(12)
+        heading_style.paragraph_format.space_after = Pt(8)
+    
+    # 设置页面边距（苹果风格：上下2.54cm，左右2.54cm）
+    sections = doc.sections
+    for section in sections:
+        section.top_margin = Cm(2.54)
+        section.bottom_margin = Cm(2.54)
+        section.left_margin = Cm(2.54)
+        section.right_margin = Cm(2.54)
+    
+    lines = content.split('\n')
+    i = 0
+    
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # 处理标题
+        if line.startswith('#### '):
+            heading = doc.add_heading(line[5:], level=4)
+            heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            i += 1
+        elif line.startswith('### '):
+            heading = doc.add_heading(line[4:], level=3)
+            heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            i += 1
+        elif line.startswith('## '):
+            heading = doc.add_heading(line[3:], level=2)
+            heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            i += 1
+        elif line.startswith('# '):
+            heading = doc.add_heading(line[2:], level=1)
+            heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in heading.runs:
+                run.font.size = Pt(20)
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(20, 20, 20)
+            i += 1
+        
+        # 处理表格
+        elif line.startswith('|') and '---' in line:
+            # 找到表格的所有行
+            table_lines = []
+            # 先回退一行，可能是表头
+            if i > 0 and lines[i-1].strip().startswith('|'):
+                table_lines.append(lines[i-1].strip())
+                i -= 1
+            while i < len(lines) and lines[i].strip().startswith('|'):
+                table_lines.append(lines[i].strip())
+                i += 1
+            
+            # 解析表格
+            if len(table_lines) >= 2:
+                # 获取列数
+                col_count = len(table_lines[0].split('|')) - 1
+                
+                # 创建表格
+                table = doc.add_table(rows=len(table_lines)-1, cols=col_count)
+                table.style = 'Table Grid'
+                table.autofit = False
+                
+                # 设置列宽
+                for col in table.columns:
+                    col.width = Cm(14 / col_count)
+                
+                # 填充表格内容
+                for row_idx, table_line in enumerate(table_lines):
+                    if row_idx == 1:
+                        # 跳过分隔线行
+                        continue
+                    
+                    cells = table_line.split('|')[1:-1]  # 去掉首尾的 |
+                    adjusted_row_idx = row_idx - (1 if row_idx > 1 else 0)
+                    
+                    for col_idx, cell_text in enumerate(cells):
+                        cell = table.cell(adjusted_row_idx, col_idx)
+                        cell.text = cell_text.strip()
+                        
+                        # 设置单元格样式
+                        for paragraph in cell.paragraphs:
+                            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            paragraph.space_after = Pt(0)
+                            for run in paragraph.runs:
+                                run.font.name = 'SF Pro Display'
+                                run.font.size = Pt(10)
+                                run.font.color.rgb = RGBColor(68, 68, 68)
+                
+                # 添加表格后空一行
+                if i < len(lines) and lines[i].strip():
+                    doc.add_paragraph()
+        
+        # 处理JSON数据（检测并转换为表格）
+        elif (line.startswith('{') and '}' in line) or (line.startswith('[') and ']' in line):
+            # 收集多行JSON数据
+            json_lines = [line]
+            brace_count = line.count('{') - line.count('}') + line.count('[') - line.count(']')
+            
+            while i + 1 < len(lines) and brace_count > 0:
+                i += 1
+                next_line = lines[i].strip()
+                json_lines.append(next_line)
+                brace_count += next_line.count('{') - next_line.count('}') + next_line.count('[') - next_line.count(']')
+            
+            full_json = ' '.join(json_lines)
+            
+            # 尝试转换为表格
+            if not _format_json_to_table(doc, full_json, "数据详情"):
+                # 如果转换失败，作为普通文本处理
+                p = doc.add_paragraph()
+                run = p.add_run(full_json)
+                run.font.name = 'SF Mono'
+                run.font.size = Pt(9)
+                run.font.color.rgb = RGBColor(100, 100, 100)
+            
+            i += 1
+            continue
+        
+        # 处理无序列表
+        elif line.startswith('- '):
+            # 找到连续的列表项
+            list_items = []
+            while i < len(lines) and lines[i].strip().startswith('- '):
+                list_items.append(lines[i].strip()[2:])
+                i += 1
+            
+            # 添加列表
+            for item in list_items:
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Cm(0.5)
+                p.add_run('• ').bold = True
+                # 处理粗体、斜体和代码
+                parts = parse_markdown_inline(item)
+                for part in parts:
+                    run = p.add_run(part['text'])
+                    if part.get('bold'):
+                        run.bold = True
+                    if part.get('italic'):
+                        run.italic = True
+                    if part.get('code'):
+                        run.font.name = 'SF Mono'
+                        run.font.color.rgb = RGBColor(0, 122, 255)
+        
+        # 处理有序列表
+        elif line.replace('.', '').strip().isdigit() and line.count('.') == 1:
+            # 尝试解析有序列表
+            import re
+            match = re.match(r'^(\d+)\.\s+(.+)$', line)
+            if match:
+                # 找到连续的列表项
+                list_items = []
+                expected_num = int(match.group(1))
+                while i < len(lines):
+                    line_i = lines[i].strip()
+                    match_i = re.match(r'^(\d+)\.\s+(.+)$', line_i)
+                    if match_i and int(match_i.group(1)) == expected_num:
+                        list_items.append(match_i.group(2))
+                        expected_num += 1
+                        i += 1
+                    else:
+                        break
+                
+                # 添加有序列表
+                for idx, item in enumerate(list_items):
+                    p = doc.add_paragraph()
+                    p.paragraph_format.left_indent = Cm(0.5)
+                    p.add_run(f'{idx + 1}. ').bold = True
+                    # 处理粗体、斜体和代码
+                    parts = parse_markdown_inline(item)
+                    for part in parts:
+                        run = p.add_run(part['text'])
+                        if part.get('bold'):
+                            run.bold = True
+                        if part.get('italic'):
+                            run.italic = True
+                        if part.get('code'):
+                            run.font.name = 'SF Mono'
+                            run.font.color.rgb = RGBColor(0, 122, 255)
+                continue
+        
+        # 处理引用块
+        elif line.startswith('> '):
+            # 找到连续的引用行
+            quote_lines = []
+            while i < len(lines) and lines[i].strip().startswith('>'):
+                quote_lines.append(lines[i].strip()[1:].strip())
+                i += 1
+            
+            # 添加引用段落
+            p = doc.add_paragraph()
+            p.style = 'Quote'
+            p.paragraph_format.left_indent = Cm(0.8)
+            p.paragraph_format.right_indent = Cm(0.8)
+            p.paragraph_format.border_left.width = Pt(3)
+            p.paragraph_format.border_left.color = RGBColor(0, 122, 255)
+            run = p.add_run('\n'.join(quote_lines))
+            run.font.name = 'SF Pro Display'
+            run.font.size = Pt(11)
+            run.font.color.rgb = RGBColor(120, 120, 120)
+            run.italic = True
+        
+        # 处理空行
+        elif not line:
+            i += 1
+        
+        # 处理普通文本段落
+        else:
+            p = doc.add_paragraph()
+            p.paragraph_format.first_line_indent = Cm(0.75)
+            # 处理粗体、斜体和代码
+            parts = parse_markdown_inline(line)
+            for part in parts:
+                run = p.add_run(part['text'])
+                if part.get('bold'):
+                    run.bold = True
+                if part.get('italic'):
+                    run.italic = True
+                if part.get('code'):
+                    run.font.name = 'SF Mono'
+                    run.font.color.rgb = RGBColor(0, 122, 255)
+            i += 1
+    
+    doc.save(output_path)
+
+
+def markdown_to_pdf(content: str, output_path: str) -> None:
+    """
+    将 Markdown 内容转换为 PDF 文档。
+    支持完整的 Markdown 语法，包括表格、代码块等。
+    
+    Args:
+        content: Markdown 格式的文本内容
+        output_path: 输出 PDF 文档的路径
+    
+    Raises:
+        ImportError: 如果 WeasyPrint 不可用
+    """
+    # 延迟加载 WeasyPrint
+    WeasyHTML = _get_weasyprint()
+    
+    if not WeasyHTML:
+        raise ImportError(
+            "WeasyPrint 不可用，请安装系统依赖。\n"
+            "macOS: brew install pygobject3 gtk+3 libffi\n"
+            "Ubuntu/Debian: apt-get install libgirepository1.0-dev libcairo2-dev libpango1.0-dev\n"
+            "Windows: 需要安装 GTK+ 运行时环境"
+        )
+    
+    # 先将 Markdown 转换为 HTML
+    html_content = markdown_to_html(content)
+    
+    # 添加基本样式
+    full_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&display=swap');
+        
+        body {{
+            font-family: 'Noto Serif SC', 'Songti SC', serif;
+            font-size: 11pt;
+            line-height: 1.6;
+            margin: 2cm;
+            color: #333;
+        }}
+        
+        h1 {{
+            text-align: center;
+            font-size: 18pt;
+            font-weight: 700;
+            margin-bottom: 1cm;
+            color: #1a1a1a;
+        }}
+        
+        h2 {{
+            font-size: 14pt;
+            font-weight: 600;
+            margin-top: 1cm;
+            margin-bottom: 0.5cm;
+            border-bottom: 2px solid #2c3e50;
+            padding-bottom: 5px;
+            color: #2c3e50;
+        }}
+        
+        h3 {{
+            font-size: 12pt;
+            font-weight: 600;
+            margin-top: 0.8cm;
+            margin-bottom: 0.3cm;
+            color: #34495e;
+        }}
+        
+        h4 {{
+            font-size: 11pt;
+            font-weight: 600;
+            margin-top: 0.6cm;
+            margin-bottom: 0.2cm;
+            color: #7f8c8d;
+        }}
+        
+        p {{
+            margin: 0.3cm 0;
+            text-align: justify;
+        }}
+        
+        ul, ol {{
+            margin: 0.3cm 0;
+            padding-left: 1.5cm;
+        }}
+        
+        li {{
+            margin: 0.2cm 0;
+        }}
+        
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0.5cm 0;
+            font-size: 10pt;
+        }}
+        
+        th, td {{
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            text-align: center;
+        }}
+        
+        th {{
+            background-color: #f8f9fa;
+            font-weight: 600;
+        }}
+        
+        tr:nth-child(even) {{
+            background-color: #fafafa;
+        }}
+        
+        code {{
+            font-family: 'SF Mono', 'Consolas', monospace;
+            font-size: 9pt;
+            background-color: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #e74c3c;
+        }}
+        
+        pre {{
+            background-color: #2d2d2d;
+            color: #f8f8f2;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'SF Mono', 'Consolas', monospace;
+            font-size: 9pt;
+            margin: 0.5cm 0;
+        }}
+        
+        pre code {{
+            background: none;
+            color: inherit;
+            padding: 0;
+        }}
+        
+        blockquote {{
+            border-left: 4px solid #3498db;
+            margin: 0.5cm 0;
+            padding-left: 15px;
+            color: #7f8c8d;
+            font-style: italic;
+        }}
+        
+        strong {{
+            font-weight: 600;
+        }}
+        
+        em {{
+            font-style: italic;
+        }}
+    </style>
+</head>
+<body>
+    {html_content}
+</body>
+</html>
+    """
+    
+    # 使用 WeasyPrint 生成 PDF
+    WeasyHTML(string=full_html).write_pdf(output_path)
+
+
+def parse_markdown_inline(text: str) -> List[Dict[str, Any]]:
+    """
+    解析行内 Markdown 格式（粗体、斜体和代码）。
+    
+    Args:
+        text: 包含行内 Markdown 的文本
+        
+    Returns:
+        解析后的片段列表，每个片段包含 text 和格式标记
+    """
+    parts = []
+    i = 0
+    
+    while i < len(text):
+        # 检测粗体 **...**（必须在斜体之前检测，避免冲突）
+        if i + 1 < len(text) and text[i:i+2] == '**':
+            end = text.find('**', i + 2)
+            if end != -1:
+                parts.append({'text': text[i+2:end], 'bold': True})
+                i = end + 2
+                continue
+        
+        # 检测斜体 *...*（注意：不是粗体的一部分）
+        if text[i] == '*' and (i == 0 or text[i-1] != '*'):
+            end = text.find('*', i + 1)
+            # 确保结束的 * 不是下一个粗体的开始
+            if end != -1 and (end + 1 >= len(text) or text[end+1] != '*'):
+                parts.append({'text': text[i+1:end], 'italic': True})
+                i = end + 1
+                continue
+        
+        # 检测代码 `...`
+        if text[i] == '`':
+            end = text.find('`', i + 1)
+            if end != -1:
+                parts.append({'text': text[i+1:end], 'code': True})
+                i = end + 1
+                continue
+        
+        # 普通文本
+        parts.append({'text': text[i]})
+        i += 1
+    
+    # 合并相邻的普通文本
+    result = []
+    for part in parts:
+        is_special = part.get('bold') or part.get('italic') or part.get('code')
+        if result and 'text' in part and not is_special:
+            result[-1]['text'] += part['text']
+        else:
+            result.append(part)
+    
+    return result
 
 
 @dataclass
@@ -67,15 +707,17 @@ class Report:
             "---\n"
         ]
 
+        # 收集所有section的数据用于报告末尾的汇总
+        all_data = {}
+
         for section in self.sections:
             lines.append(f"## {section.title}\n")
             lines.append(f"{section.content}\n")
-            if section.data:
-                lines.append("**数据统计**:\n")
-                lines.append("```json\n")
-                lines.append(json.dumps(section.data, indent=2, ensure_ascii=False) + "\n")
-                lines.append("```\n")
             lines.append("\n")
+            
+            # 收集数据用于汇总
+            if section.data:
+                all_data[section.section_type] = section.data
 
         if self.summary:
             lines.append("---\n\n")
@@ -229,27 +871,51 @@ class ReportGenerator:
         )
 
     def _create_error_analysis_section(self, result: ProcessingResult) -> ReportSection:
-        all_errors = []
-        for analysis in result.analysis_results:
-            for error in analysis.key_errors:
-                all_errors.append(error)
+        # 创建智能错误合并器，使用可配置的合并策略
+        merge_config = MergeConfig(
+            semantic_similarity_threshold=0.75,
+            max_examples_per_group=3,
+            max_groups=10,
+            enable_semantic_merging=True,
+            merge_by_error_type=True,
+            merge_by_message_pattern=True
+        )
+        error_merger = ErrorMerger(merge_config)
+        
+        # 使用智能合并功能合并错误
+        merged_errors = error_merger.merge_from_analysis_results(result.analysis_results)
 
-        all_errors.sort(key=lambda x: x.get('count', 0), reverse=True)
-        top_errors = all_errors[:10]
-
-        errors_data = {'关键错误': top_errors}
+        errors_data = {'关键错误': merged_errors}
 
         content = "### 关键错误分析\n\n"
-        for idx, error in enumerate(top_errors, 1):
+        for idx, error in enumerate(merged_errors, 1):
             error_type = error.get('error_type', 'Unknown')
             description = error.get('description', '')
             count = error.get('count', 0)
             severity = error.get('severity', 'medium')
-
+            
             content += f"#### {idx}. {error_type}\n"
             content += f"- **描述**: {description}\n"
             content += f"- **出现次数**: {count:,}\n"
-            content += f"- **严重程度**: {severity}\n\n"
+            content += f"- **严重程度**: {severity}\n"
+            
+            # 如果有影响的类，显示出来
+            affected_classes = error.get('affected_classes', [])
+            if affected_classes:
+                content += f"- **影响类**: {', '.join(affected_classes[:5])}"
+                if len(affected_classes) > 5:
+                    content += f" 等{len(affected_classes)}个类"
+                content += "\n"
+            
+            # 如果有示例，显示示例消息
+            examples = error.get('examples', [])
+            if examples:
+                content += f"- **示例消息**:\n"
+                for i, example in enumerate(examples[:3], 1):
+                    msg = example.get('message', '')[:80] + "..." if len(example.get('message', '')) > 80 else example.get('message', '')
+                    content += f"  {i}. {msg}\n"
+            
+            content += "\n"
 
         return ReportSection(
             title="关键错误分析",
@@ -860,7 +1526,7 @@ class ReportGenerator:
         return " ".join(summaries[:3])
 
     def to_html(self, report: Report) -> str:
-        """Generate HTML report with light theme."""
+        """Generate HTML report with Apple-style design."""
         sections_html = ""
         
         for section in report.sections:
@@ -882,208 +1548,541 @@ class ReportGenerator:
     <style>
         :root {{
             --primary: #007AFF;
+            --primary-hover: #0066CC;
             --success: #34C759;
             --warning: #FF9500;
             --danger: #FF3B30;
             --bg: #FFFFFF;
-            --bg-card: #FAFAFA;
-            --bg-hover: #F5F5F7;
+            --bg-secondary: #F5F5F7;
+            --bg-card: #FFFFFF;
+            --bg-hover: #F8F8FA;
             --text: #1D1D1F;
             --text-secondary: #6E6E73;
             --text-tertiary: #8E8E93;
             --border: #E5E5EA;
-            --shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-            --radius: 12px;
+            --border-light: #F0F0F0;
+            --shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+            --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.1);
+            --radius: 16px;
             --radius-sm: 8px;
-            --font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+            --radius-md: 12px;
+            --font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+            --transition-fast: 0.15s ease;
+            --transition-normal: 0.25s ease;
+            --transition-slow: 0.35s ease;
         }}
         
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.5; }}
+        * {{ 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }}
+        
+        body {{ 
+            font-family: var(--font); 
+            background: var(--bg-secondary); 
+            color: var(--text); 
+            line-height: 1.5; 
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }}
         
         .header {{ 
-            background: linear-gradient(135deg, #667EEA 0%, #764BA2 100%); 
-            color: white; 
-            padding: 2rem; 
+            background: linear-gradient(180deg, #FFFFFF 0%, #F5F5F7 100%);
+            border-bottom: 1px solid var(--border-light);
+            padding: 32px 24px; 
             text-align: center;
         }}
-        .header h1 {{ font-size: 1.75rem; font-weight: 600; margin-bottom: 0.5rem; }}
-        .header p {{ opacity: 0.9; font-size: 0.95rem; }}
+        
+        .header-content {{
+            max-width: 800px;
+            margin: 0 auto;
+        }}
+        
+        .header h1 {{ 
+            font-size: 28px; 
+            font-weight: 600; 
+            color: var(--text);
+            margin-bottom: 8px;
+            letter-spacing: -0.02em;
+        }}
+        
+        .header p {{ 
+            font-size: 14px; 
+            color: var(--text-secondary);
+            letter-spacing: 0.01em;
+        }}
         
         .stats-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 1rem;
-            padding: 1.5rem;
-            max-width: 1200px;
-            margin: -2rem auto 2rem;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            padding: 24px;
+            max-width: 1024px;
+            margin: -48px auto 32px;
         }}
+        
         .stat-card {{
-            background: white;
-            padding: 1.25rem;
+            background: var(--bg-card);
+            padding: 20px;
             border-radius: var(--radius);
             box-shadow: var(--shadow-md);
             text-align: center;
+            transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+            border: 1px solid var(--border-light);
         }}
-        .stat-value {{ font-size: 1.75rem; font-weight: 700; color: var(--primary); }}
-        .stat-label {{ font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.25rem; }}
+        
+        .stat-card:hover {{
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }}
+        
+        .stat-value {{ 
+            font-size: 32px; 
+            font-weight: 700; 
+            color: var(--text);
+            letter-spacing: -0.02em;
+        }}
+        
+        .stat-label {{ 
+            font-size: 13px; 
+            color: var(--text-secondary); 
+            margin-top: 8px;
+            letter-spacing: 0.02em;
+        }}
+        
         .stat-value.success {{ color: var(--success); }}
         .stat-value.warning {{ color: var(--warning); }}
         .stat-value.danger {{ color: var(--danger); }}
+        .stat-value.primary {{ color: var(--primary); }}
         
-        .main {{ max-width: 1200px; margin: 0 auto; padding: 0 1.5rem 3rem; }}
+        .main {{ 
+            max-width: 900px; 
+            margin: 0 auto; 
+            padding: 0 24px 48px; 
+        }}
         
         .section-card {{
-            background: white;
+            background: var(--bg-card);
             border-radius: var(--radius);
             box-shadow: var(--shadow);
-            border: 1px solid var(--border);
-            margin-bottom: 1rem;
+            border: 1px solid var(--border-light);
+            margin-bottom: 20px;
             overflow: hidden;
+            transition: box-shadow var(--transition-normal);
         }}
+        
+        .section-card:hover {{
+            box-shadow: var(--shadow-md);
+        }}
+        
         .section-header {{
-            padding: 1.25rem 1.5rem;
-            border-bottom: 1px solid var(--border);
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border-light);
             cursor: pointer;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            transition: background-color var(--transition-fast);
         }}
-        .section-header:hover {{ background: var(--bg-hover); }}
-        .section-title {{ font-weight: 600; font-size: 1rem; }}
-        .section-toggle {{ color: var(--text-tertiary); transition: transform 0.3s; }}
-        .section-toggle.expanded {{ transform: rotate(180deg); }}
-        .section-body {{ padding: 1.5rem; }}
+        
+        .section-header:hover {{ 
+            background: var(--bg-hover); 
+        }}
+        
+        .section-title {{ 
+            font-weight: 600; 
+            font-size: 15px; 
+            color: var(--text);
+            letter-spacing: -0.01em;
+        }}
+        
+        .section-toggle {{ 
+            color: var(--text-tertiary); 
+            font-size: 12px;
+            transition: transform var(--transition-normal);
+            opacity: 0.6;
+        }}
+        
+        .section-header:hover .section-toggle {{
+            opacity: 1;
+        }}
+        
+        .section-toggle.expanded {{ 
+            transform: rotate(180deg); 
+        }}
+        
+        .section-body {{ 
+            padding: 24px;
+            animation: fadeIn 0.3s ease;
+        }}
+        
+        @keyframes fadeIn {{
+            from {{
+                opacity: 0;
+                transform: translateY(-8px);
+            }}
+            to {{
+                opacity: 1;
+                transform: translateY(0);
+            }}
+        }}
+        
+        /* Markdown 转换样式 */
+        .summary-text h1, .summary-text h2, .summary-text h3, .summary-text h4, .summary-text h5 {{
+            margin: 24px 0 12px;
+            font-weight: 600;
+            color: var(--text);
+            letter-spacing: -0.01em;
+        }}
+        
+        .summary-text h1 {{ 
+            font-size: 20px; 
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-light);
+        }}
+        
+        .summary-text h2 {{ 
+            font-size: 18px; 
+        }}
+        
+        .summary-text h3 {{ 
+            font-size: 16px; 
+            color: var(--text-secondary);
+        }}
+        
+        .summary-text h4 {{ 
+            font-size: 15px; 
+            color: var(--text-secondary);
+            font-weight: 500;
+        }}
+        
+        .summary-text h5 {{ 
+            font-size: 14px; 
+            color: var(--text-tertiary);
+            font-weight: 500;
+        }}
+        
+        .summary-text ul, .summary-text ol {{
+            margin: 16px 0;
+            padding-left: 24px;
+        }}
+        
+        .summary-text ul {{
+            list-style: disc;
+        }}
+        
+        .summary-text ol {{
+            list-style: decimal;
+        }}
+        
+        .summary-text li {{
+            margin: 8px 0;
+            line-height: 1.7;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }}
+        
+        .summary-text strong {{
+            font-weight: 600;
+            color: var(--text);
+        }}
+        
+        .summary-text code {{
+            background: var(--bg-secondary);
+            padding: 4px 10px;
+            border-radius: var(--radius-sm);
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+            font-size: 13px;
+            color: var(--text);
+            letter-spacing: 0.01em;
+        }}
+        
+        .summary-text pre {{
+            background: #1D1D1F;
+            color: #FFFFFF;
+            padding: 16px;
+            border-radius: var(--radius-md);
+            overflow-x: auto;
+            margin: 16px 0;
+        }}
+        
+        .summary-text pre code {{
+            background: transparent;
+            color: #A7A7AA;
+            padding: 0;
+            font-size: 12px;
+            line-height: 1.6;
+        }}
+        
+        .summary-text p {{
+            margin: 12px 0;
+            line-height: 1.7;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }}
         
         .data-table {{
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.9rem;
+            font-size: 13px;
+            margin: 16px 0;
         }}
+        
         .data-table th {{
             text-align: left;
-            padding: 0.75rem;
-            background: var(--bg-card);
+            padding: 12px 16px;
+            background: var(--bg-secondary);
             font-weight: 600;
-            font-size: 0.75rem;
+            font-size: 11px;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.08em;
             color: var(--text-secondary);
             border-bottom: 1px solid var(--border);
         }}
+        
         .data-table td {{
-            padding: 0.75rem;
-            border-bottom: 1px solid var(--border);
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-light);
+            color: var(--text-secondary);
+            transition: background-color var(--transition-fast);
         }}
-        .data-table tr:hover {{ background: var(--bg-hover); }}
+        
+        .data-table tr:hover td {{ 
+            background: var(--bg-hover); 
+        }}
+        
+        .data-table tr:last-child td {{
+            border-bottom: none;
+        }}
         
         .severity-badge {{
             display: inline-block;
-            padding: 0.25rem 0.75rem;
+            padding: 4px 12px;
             border-radius: 9999px;
-            font-size: 0.7rem;
+            font-size: 11px;
             font-weight: 600;
             text-transform: uppercase;
+            letter-spacing: 0.05em;
         }}
-        .severity-critical {{ background: rgba(255, 59, 48, 0.15); color: var(--danger); }}
-        .severity-high {{ background: rgba(255, 149, 0, 0.15); color: var(--warning); }}
-        .severity-medium {{ background: rgba(0, 122, 255, 0.15); color: var(--primary); }}
+        
+        .severity-critical {{ 
+            background: rgba(255, 59, 48, 0.1); 
+            color: var(--danger); 
+        }}
+        
+        .severity-high {{ 
+            background: rgba(255, 149, 0, 0.1); 
+            color: var(--warning); 
+        }}
+        
+        .severity-medium {{ 
+            background: rgba(0, 122, 255, 0.1); 
+            color: var(--primary); 
+        }}
+        
+        .severity-low {{ 
+            background: rgba(52, 199, 89, 0.1); 
+            color: var(--success); 
+        }}
         
         .suggestions-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1rem;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
         }}
+        
         .suggestion-card {{
-            background: var(--bg-card);
-            padding: 1.25rem;
-            border-radius: var(--radius-sm);
-            border-left: 3px solid var(--primary);
+            background: var(--bg-secondary);
+            padding: 20px;
+            border-radius: var(--radius-md);
+            border-left: 4px solid var(--primary);
+            transition: transform var(--transition-fast), box-shadow var(--transition-fast);
         }}
+        
+        .suggestion-card:hover {{
+            transform: translateX(4px);
+            box-shadow: var(--shadow);
+        }}
+        
         .suggestion-header {{
             font-weight: 600;
-            margin-bottom: 1rem;
-            color: var(--text-secondary);
-            font-size: 0.9rem;
+            margin-bottom: 12px;
+            color: var(--text);
+            font-size: 14px;
+            letter-spacing: -0.01em;
         }}
+        
         .suggestion-list {{
             list-style: none;
         }}
+        
         .suggestion-list li {{
-            padding: 0.5rem 0;
-            font-size: 0.9rem;
-            border-bottom: 1px solid var(--border);
+            padding: 10px 0;
+            font-size: 13px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border-light);
+            line-height: 1.6;
         }}
-        .suggestion-list li:last-child {{ border-bottom: none; }}
+        
+        .suggestion-list li:last-child {{ 
+            border-bottom: none; 
+        }}
         
         .trend-list {{
             list-style: none;
             counter-reset: trend;
         }}
+        
         .trend-list li {{
             position: relative;
-            padding: 0.75rem 0 0.75rem 2.5rem;
-            border-bottom: 1px solid var(--border);
+            padding: 16px 0 16px 48px;
+            border-bottom: 1px solid var(--border-light);
             counter-increment: trend;
+            transition: background-color var(--transition-fast);
         }}
+        
+        .trend-list li:hover {{
+            background: var(--bg-hover);
+        }}
+        
         .trend-list li::before {{
             content: counter(trend);
             position: absolute;
             left: 0;
-            width: 24px;
-            height: 24px;
-            background: rgba(0, 122, 255, 0.1);
+            width: 32px;
+            height: 32px;
+            background: rgba(0, 122, 255, 0.08);
             color: var(--primary);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.75rem;
+            font-size: 13px;
             font-weight: 600;
         }}
         
-        .summary-text {{ font-size: 1rem; line-height: 1.7; color: var(--text); }}
+        .trend-list li:last-child {{
+            border-bottom: none;
+        }}
+        
+        .summary-text {{ 
+            font-size: 14px; 
+            line-height: 1.7; 
+            color: var(--text-secondary); 
+        }}
         
         .chart-bar-container {{
             display: flex;
             align-items: flex-end;
-            gap: 0.5rem;
-            height: 100px;
-            padding: 1rem 0;
+            gap: 8px;
+            height: 120px;
+            padding: 16px 0;
         }}
+        
         .chart-bar {{
             flex: 1;
-            background: linear-gradient(180deg, var(--primary) 0%, rgba(0, 122, 255, 0.6) 100%);
-            border-radius: 4px 4px 0 0;
+            background: linear-gradient(180deg, var(--primary) 0%, rgba(0, 122, 255, 0.3) 100%);
+            border-radius: 6px 6px 0 0;
             position: relative;
+            transition: opacity var(--transition-fast);
         }}
+        
+        .chart-bar:hover {{
+            opacity: 0.8;
+        }}
+        
         .chart-bar-label {{
             position: absolute;
-            bottom: -1.5rem;
+            bottom: -24px;
             left: 50%;
             transform: translateX(-50%);
-            font-size: 0.7rem;
-            color: var(--text-secondary);
+            font-size: 11px;
+            color: var(--text-tertiary);
             white-space: nowrap;
+            letter-spacing: 0.02em;
+        }}
+        
+        .highlight-box {{
+            background: linear-gradient(135deg, rgba(0, 122, 255, 0.05) 0%, rgba(52, 199, 89, 0.05) 100%);
+            border: 1px solid rgba(0, 122, 255, 0.1);
+            border-radius: var(--radius-md);
+            padding: 16px 20px;
+            margin: 16px 0;
+        }}
+        
+        .footer {{
+            text-align: center;
+            padding: 32px 24px;
+            color: var(--text-tertiary);
+            font-size: 12px;
+            letter-spacing: 0.02em;
         }}
         
         @media (max-width: 768px) {{
-            .stats-grid {{ grid-template-columns: repeat(2, 1fr); }}
-            .suggestions-grid {{ grid-template-columns: 1fr; }}
-            .section-body {{ padding: 1rem; }}
+            .stats-grid {{ 
+                grid-template-columns: repeat(2, 1fr); 
+                gap: 12px;
+                padding: 16px;
+                margin-top: -40px;
+            }}
+            
+            .stat-card {{
+                padding: 16px;
+            }}
+            
+            .stat-value {{
+                font-size: 24px;
+            }}
+            
+            .suggestions-grid {{ 
+                grid-template-columns: 1fr; 
+            }}
+            
+            .section-body {{ 
+                padding: 16px; 
+            }}
+            
+            .section-header {{
+                padding: 16px;
+            }}
+            
+            .header {{
+                padding: 24px 16px;
+            }}
+            
+            .header h1 {{
+                font-size: 22px;
+            }}
+            
+            .main {{
+                padding: 0 16px 32px;
+            }}
+        }}
+        
+        @media (max-width: 480px) {{
+            .stats-grid {{ 
+                grid-template-columns: 1fr; 
+            }}
+            
+            .header h1 {{
+                font-size: 18px;
+            }}
         }}
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>📊 {report.title}</h1>
-        <p>{report.generated_at.strftime('%Y-%m-%d %H:%M:%S')} | {report.file_size}</p>
+        <div class="header-content">
+            <h1>📊 {report.title}</h1>
+            <p>{report.generated_at.strftime('%Y-%m-%d %H:%M:%S')} | {report.file_size}</p>
+        </div>
     </div>
     
     <div class="stats-grid">
         <div class="stat-card">
-            <div class="stat-value">{report.total_lines:,}</div>
+            <div class="stat-value primary">{report.total_lines:,}</div>
             <div class="stat-label">总行数</div>
         </div>
         <div class="stat-card">
@@ -1102,16 +2101,46 @@ class ReportGenerator:
     
     <div class="main">
         {sections_html}
+        
+        <div class="section-card">
+            <div class="section-header">
+                <span class="section-title">📝 总体摘要</span>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-body summary-text">
+                {report.summary}
+            </div>
+        </div>
+    </div>
+    
+    <div class="footer">
+        Log Analyzer Report Generated by Trae AI
     </div>
     
     <script>
         document.querySelectorAll('.section-header').forEach(header => {{
             header.addEventListener('click', () => {{
-                const card = header.parentElement;
                 const body = header.nextElementSibling;
                 const toggle = header.querySelector('.section-toggle');
-                body.style.display = body.style.display === 'none' ? 'block' : 'none';
-                toggle.classList.toggle('expanded');
+                
+                if (body.style.display === 'none' || !body.style.display) {{
+                    body.style.display = 'block';
+                    body.style.animation = 'fadeIn 0.3s ease';
+                    toggle.classList.add('expanded');
+                }} else {{
+                    body.style.display = 'none';
+                    toggle.classList.remove('expanded');
+                }}
+            }});
+        }});
+        
+        document.querySelectorAll('.stat-card').forEach(card => {{
+            card.addEventListener('mouseenter', () => {{
+                card.style.transform = 'translateY(-4px)';
+            }});
+            
+            card.addEventListener('mouseleave', () => {{
+                card.style.transform = 'translateY(0)';
             }});
         }});
     </script>
@@ -1119,7 +2148,7 @@ class ReportGenerator:
 </html>"""
 
     def _generate_default_section_html(self, section: ReportSection) -> str:
-        content = section.content.replace('\n', '<br>').replace('**', '<strong>').replace('</strong>', '</strong>')
+        content = markdown_to_html(section.content)
         return f"""
 <div class="section-card">
     <div class="section-header">
@@ -1290,22 +2319,41 @@ class ReportGenerator:
         
         content = md_content
         
-        # 处理代码块（先保存再处理，避免干扰其他转换）
+        # 先处理代码块（先保存再处理，避免干扰其他转换）
         code_blocks = []
         def save_code_block(match):
             code_blocks.append(match.group(0))
-            return f"__CODE_BLOCK_{len(code_blocks)-1}__"
+            return f"__CODE_BLOCK_PLACEHOLDER_{len(code_blocks)}__"
         content = re.sub(r'```[\s\S]*?```', save_code_block, content)
         
-        # 处理表格（先保存）
-        table_blocks = []
-        def save_table(match):
-            table_blocks.append(match.group(0))
-            return f"__TABLE_BLOCK_{len(table_blocks)-1}__"
-        content = re.sub(r'\|.*\|\n\|[-|]+\|\n([\s\S]*?)(?=\n\n|\Z)', save_table, content)
+        # 先处理特殊字符（避免后续转义问题）
+        # 但保留代码块占位符中的内容
+        # 找到所有占位符位置
+        placeholder_pattern = r'__CODE_BLOCK_PLACEHOLDER_\d+__'
+        placeholders = {}
+        for match in re.finditer(placeholder_pattern, content):
+            placeholders[match.group(0)] = match.start()
         
-        # 处理内联代码
-        content = re.sub(r'`([^`]+)`', r'<font name="Courier">\1</font>', content)
+        # 处理代码块以外的内容中的特殊字符
+        result_parts = []
+        last_end = 0
+        for match in re.finditer(placeholder_pattern, content):
+            # 处理占位符之前的内容
+            before = content[last_end:match.start()]
+            before = self._escape_html_chars(before)
+            result_parts.append(before)
+            # 保留占位符
+            result_parts.append(match.group(0))
+            last_end = match.end()
+        # 处理最后的内容
+        after = content[last_end:]
+        after = self._escape_html_chars(after)
+        result_parts.append(after)
+        
+        content = ''.join(result_parts)
+        
+        # 处理内联代码（必须在标题之前处理）
+        content = re.sub(r'`([^`]+)`', r'<font name="Courier" color="#CC0000">\1</font>', content)
         
         # 正确处理粗体标记：**text** → <b>text</b>
         content = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', content)
@@ -1315,69 +2363,54 @@ class ReportGenerator:
         content = re.sub(r'\*(.+?)\*', r'<i>\1</i>', content)
         content = re.sub(r'_(.+?)_', r'<i>\1</i>', content)
         
-        # 处理标题（简化处理）
-        content = re.sub(r'\n### (.+)', r'\n<br/><b fontsize="12">\1</b>', content)
-        content = re.sub(r'\n## (.+)', r'\n<br/><b fontsize="14">\1</b>', content)
-        content = re.sub(r'\n# (.+)', r'\n<br/><b fontsize="16">\1</b>', content)
+        # 处理标题（使用多行模式）
+        content = re.sub(r'^### (.+)$', r'<br/><b>\1</b>', content, flags=re.MULTILINE)
+        content = re.sub(r'^## (.+)$', r'<br/><br/><b><font size="14">\1</font></b>', content, flags=re.MULTILINE)
+        content = re.sub(r'^# (.+)$', r'<br/><br/><b><font size="16">\1</font></b>', content, flags=re.MULTILINE)
         
         # 处理有序列表
-        content = re.sub(r'\n(\d+)\. ', r'\n<br/>\1. ', content)
+        content = re.sub(r'^(\d+)\.\s+(.+)$', r'<br/>\1. \2', content, flags=re.MULTILINE)
         
         # 处理无序列表
-        content = re.sub(r'\n- ', r'\n<br/>• ', content)
-        content = re.sub(r'\n\* ', r'\n<br/>• ', content)
-        
-        # 处理嵌套列表（增加缩进）
-        content = re.sub(r'(\n• )(\s+• )', r'\1&nbsp;&nbsp;&nbsp;&nbsp;• ', content)
+        content = re.sub(r'^[-*+]\s+(.+)$', r'<br/>• \1', content, flags=re.MULTILINE)
         
         # 处理链接（简化处理）
         content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'<u>\1</u>', content)
         
         # 处理水平线
-        content = re.sub(r'\n[-*=_]{3,}\n', r'\n<br/>────────────────────────────────────────<br/>\n', content)
-        
-        # 恢复表格（转换为文本格式）
-        for i, table_content in enumerate(table_blocks):
-            content = content.replace(f"__TABLE_BLOCK_{i}__", 
-                                     self._convert_markdown_table_to_pdf(table_content))
+        content = re.sub(r'^[-*=_]{3,}$', r'<br/>────────────────────────────────────────<br/>', content, flags=re.MULTILINE)
         
         # 恢复代码块
         for i, code_block in enumerate(code_blocks):
-            # 移除代码块标记
+            # 移除代码块标记和语言标识
             code_content = re.sub(r'```(\w+)?\n?', '', code_block)
-            code_content = code_content.replace('\n', '<br/>')
-            code_content = code_content.replace('&', '&amp;')
-            code_content = code_content.replace('<', '&lt;')
-            code_content = code_content.replace('>', '&gt;')
-            content = content.replace(f"__CODE_BLOCK_{i}__", 
-                                     f'<br/><font name="Courier" fontSize="8">{code_content}</font><br/>')
+            code_content = code_content.strip()
+            # 处理代码内容中的特殊字符（但保留换行）
+            code_content = code_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            code_lines = code_content.split('\n')
+            code_content_html = '<br/>'.join(code_lines)
+            content = content.replace(f"__CODE_BLOCK_PLACEHOLDER_{i}__", 
+                                     f'<br/><br/><font name="Courier" color="#333333" backcolor="#F5F5F5" fontSize="8">{code_content_html}</font><br/>')
         
         # 处理换行
-        content = content.replace('\n', '<br/>')
+        # 先合并多个连续换行
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        # 将单个换行转换为 <br/>
+        content = re.sub(r'\n', '<br/>', content)
         
-        # 处理中文标点符号（确保正确显示）
-        content = content.replace('，', '，')
-        content = content.replace('。', '。')
-        content = content.replace('！', '！')
-        content = content.replace('？', '？')
-        content = content.replace('；', '；')
-        content = content.replace('：', '：')
-        content = content.replace('（', '（')
-        content = content.replace('）', '）')
-        content = content.replace('【', '【')
-        content = content.replace('】', '】')
-        content = content.replace('“', '“')
-        content = content.replace('”', '”')
-        content = content.replace('‘', '‘')
-        content = content.replace('’', '’')
-        
-        # 处理特殊字符
-        content = content.replace('&', '&amp;')
-        content = content.replace('<', '&lt;')
-        content = content.replace('>', '&gt;')
+        # 清理多余的 <br/>
+        content = re.sub(r'(<br/>){3,}', '<br/><br/>', content)
         
         return content
     
+    def _escape_html_chars(self, text: str) -> str:
+        """转义 HTML 特殊字符"""
+        text = text.replace('&', '&amp;')
+        text = text.replace('<', '&lt;')
+        text = text.replace('>', '&gt;')
+        return text
+
+
     def _convert_markdown_table_to_pdf(self, table_content: str) -> str:
         """将Markdown表格转换为PDF支持的文本格式"""
         import re
@@ -1436,6 +2469,137 @@ class ReportGenerator:
         result += separator + '<br/>'
         
         return result
+
+    def _add_data_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
+        """将数据转换为格式化的PDF表格或文本，避免直接输出JSON"""
+        from reportlab.platypus import Spacer, Table, TableStyle, Paragraph
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+
+        if not data:
+            return
+
+        for key, value in data.items():
+            if not value:
+                continue
+
+            story.append(Spacer(1, 0.2 * cm))
+            story.append(Paragraph(f"<b>{key}:</b>", body_style))
+
+            if isinstance(value, dict):
+                self._add_dict_table_to_pdf(story, value, body_style)
+            elif isinstance(value, list):
+                if len(value) > 0 and isinstance(value[0], dict):
+                    self._add_list_table_to_pdf(story, value, body_style)
+                else:
+                    for item in value:
+                        story.append(Paragraph(f"• {item}", body_style))
+            elif isinstance(value, (int, float)):
+                story.append(Paragraph(str(value), body_style))
+            else:
+                story.append(Paragraph(str(value), body_style))
+
+            story.append(Spacer(1, 0.2 * cm))
+
+    def _add_dict_table_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
+        """将字典数据转换为PDF表格"""
+        from reportlab.platypus import Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+
+        if not data:
+            return
+
+        simple_items = []
+        for k, v in data.items():
+            if v is None:
+                continue
+            if isinstance(v, (str, int, float, bool)):
+                simple_items.append([Paragraph(str(k), body_style), Paragraph(str(v), body_style)])
+            elif isinstance(v, list) and len(v) <= 3:
+                simple_items.append([Paragraph(str(k), body_style), Paragraph(', '.join(str(x) for x in v), body_style)])
+
+        if not simple_items:
+            story.append(Paragraph('<i>（详细数据见上方文本描述）</i>', body_style))
+            return
+
+        table_data = [[Paragraph('字段', body_style), Paragraph('值', body_style)]] + simple_items
+        table = Table(table_data, colWidths=[6 * cm, 10 * cm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0f0f0')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), body_style.fontName),
+            ('FONTNAME', (0, 1), (-1, -1), body_style.fontName),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(table)
+
+    def _add_list_table_to_pdf(self, story, data_list: List[Dict[str, Any]], body_style) -> None:
+        """将字典列表转换为PDF表格"""
+        from reportlab.platypus import Table, TableStyle, Paragraph
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+
+        if not data_list:
+            return
+
+        all_keys = set()
+        for item in data_list:
+            if isinstance(item, dict):
+                all_keys.update(item.keys())
+
+        priority_keys = ['error_type', 'description', 'severity', 'count',
+                         'category', 'suggestion', 'message', 'timestamp',
+                         'action', 'priority', 'status']
+        columns = [k for k in priority_keys if k in all_keys]
+        remaining = [k for k in all_keys if k not in columns]
+        columns.extend(remaining[:max(0, 6 - len(columns))])
+
+        if not columns:
+            return
+
+        table_data = [[Paragraph(str(c).replace('_', ' ').title(), body_style) for c in columns]]
+        for item in data_list:
+            if not isinstance(item, dict):
+                continue
+            row = []
+            for key in columns:
+                val = item.get(key, '')
+                if isinstance(val, list):
+                    cell_text = ', '.join(str(x) for x in val[:3])
+                    if len(val) > 3:
+                        cell_text += f' 等{len(val)}项'
+                elif isinstance(val, dict):
+                    cell_text = str(val)[:50] + '...' if len(str(val)) > 50 else str(val)
+                else:
+                    cell_text = str(val)[:100] + '...' if len(str(val)) > 100 else str(val)
+                row.append(Paragraph(cell_text, body_style))
+            table_data.append(row)
+
+        col_width = 16 * cm / len(columns)
+        table = Table(table_data, colWidths=[col_width] * len(columns))
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0f0f0')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), body_style.fontName),
+            ('FONTNAME', (0, 1), (-1, -1), body_style.fontName),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(table)
 
     def _save_as_pdf(self, report: Report, output_path: str) -> None:
         """将报告保存为 PDF 格式"""
@@ -1578,17 +2742,8 @@ class ReportGenerator:
             
             # 数据详情部分（与Word/MD保持一致，使用更美观的格式）
             if section.data:
-                # 只在有实际数据时显示
-                data_text = json.dumps(section.data, indent=2, ensure_ascii=False)
-                # 检查数据是否非空
-                if data_text and data_text != '{}' and data_text != '[]':
-                    story.append(Spacer(1, 0.2*cm))
-                    story.append(Paragraph("<b>数据统计:</b>", body_style))
-                    # 使用等宽字体显示JSON数据
-                    data_lines = data_text.split('\n')
-                    for line in data_lines:
-                        if line.strip():
-                            story.append(Paragraph(f'<font name="Courier" fontSize="8">{line}</font>', body_style))
+                # 不再直接输出原始JSON，而是转换为格式化表格或文本
+                self._add_data_to_pdf(story, section.data, body_style)
             
             story.append(Spacer(1, 0.6*cm))
 
@@ -1739,6 +2894,147 @@ class ReportGenerator:
                 if j < num_cols:
                     table.cell(i + 1, j).text = cell_text
 
+    def _add_data_to_word(self, doc, data: Dict[str, Any]) -> None:
+        """将数据转换为格式化的Word表格或文本，避免直接输出JSON"""
+        from docx.shared import Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        if not data:
+            return
+
+        # 根据数据内容选择合适的展示方式
+        for key, value in data.items():
+            if not value:
+                continue
+
+            # 添加小标题
+            doc.add_paragraph().add_run(f"{key}:").bold = True
+
+            if isinstance(value, dict):
+                # 字典数据 -> 两列表格（键值对）
+                self._add_dict_table_to_word(doc, value)
+            elif isinstance(value, list):
+                if len(value) > 0 and isinstance(value[0], dict):
+                    # 字典列表 -> 多列表格
+                    self._add_list_table_to_word(doc, value)
+                else:
+                    # 普通列表 -> 项目符号列表
+                    for item in value:
+                        p = doc.add_paragraph()
+                        p.add_run('• ').bold = True
+                        p.add_run(str(item))
+            elif isinstance(value, (int, float)):
+                # 数字 -> 直接显示
+                p = doc.add_paragraph()
+                p.add_run(str(value))
+            else:
+                # 其他 -> 直接显示为文本
+                p = doc.add_paragraph()
+                p.add_run(str(value))
+
+            # 每个数据项之间空一行
+            doc.add_paragraph()
+
+    def _add_dict_table_to_word(self, doc, data: Dict[str, Any]) -> None:
+        """将字典数据转换为Word表格"""
+        from docx.shared import Pt
+
+        if not data:
+            return
+
+        # 过滤掉空值和嵌套复杂结构
+        simple_items = []
+        for k, v in data.items():
+            if v is None:
+                continue
+            if isinstance(v, (str, int, float, bool)):
+                simple_items.append((k, str(v)))
+            elif isinstance(v, list) and len(v) <= 3:
+                simple_items.append((k, ', '.join(str(x) for x in v)))
+
+        if not simple_items:
+            # 如果没有简单项，显示提示
+            p = doc.add_paragraph()
+            p.add_run('（详细数据见上方文本描述）').italic = True
+            p.runs[0].font.size = Pt(9)
+            return
+
+        table = doc.add_table(rows=len(simple_items), cols=2)
+        table.style = 'Light Grid Accent 1'
+
+        for i, (k, v) in enumerate(simple_items):
+            table.cell(i, 0).text = str(k)
+            table.cell(i, 1).text = str(v)
+            # 设置字体
+            for cell in (table.cell(i, 0), table.cell(i, 1)):
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.name = 'Microsoft YaHei'
+                        run.font.size = Pt(10)
+            # 第一列加粗
+            for run in table.cell(i, 0).paragraphs[0].runs:
+                run.bold = True
+
+    def _add_list_table_to_word(self, doc, data_list: List[Dict[str, Any]]) -> None:
+        """将字典列表转换为Word表格"""
+        from docx.shared import Pt
+
+        if not data_list:
+            return
+
+        # 收集所有可能的列名
+        all_keys = set()
+        for item in data_list:
+            if isinstance(item, dict):
+                all_keys.update(item.keys())
+
+        # 优先保留常见字段，并限制列数
+        priority_keys = ['error_type', 'description', 'severity', 'count',
+                         'category', 'suggestion', 'message', 'timestamp',
+                         'action', 'priority', 'status']
+        columns = [k for k in priority_keys if k in all_keys]
+        # 补充其他字段（最多6列）
+        remaining = [k for k in all_keys if k not in columns]
+        columns.extend(remaining[:max(0, 6 - len(columns))])
+
+        if not columns:
+            return
+
+        table = doc.add_table(rows=len(data_list) + 1, cols=len(columns))
+        table.style = 'Light Grid Accent 1'
+
+        # 表头
+        for j, col_name in enumerate(columns):
+            cell = table.cell(0, j)
+            cell.text = str(col_name).replace('_', ' ').title()
+            for run in cell.paragraphs[0].runs:
+                run.bold = True
+                run.font.name = 'Microsoft YaHei'
+                run.font.size = Pt(10)
+
+        # 数据行
+        for i, item in enumerate(data_list):
+            if not isinstance(item, dict):
+                continue
+            for j, key in enumerate(columns):
+                val = item.get(key, '')
+                # 处理不同类型的值
+                if isinstance(val, list):
+                    cell_text = ', '.join(str(x) for x in val[:3])
+                    if len(val) > 3:
+                        cell_text += f' 等{len(val)}项'
+                elif isinstance(val, dict):
+                    cell_text = str(val)[:50] + '...' if len(str(val)) > 50 else str(val)
+                else:
+                    cell_text = str(val)[:100] + '...' if len(str(val)) > 100 else str(val)
+
+                cell = table.cell(i + 1, j)
+                cell.text = cell_text
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.name = 'Microsoft YaHei'
+                        run.font.size = Pt(9)
+
     def _save_as_word(self, report: Report, output_path: str) -> None:
         """将报告保存为 Word 格式"""
         from docx import Document
@@ -1777,15 +3073,9 @@ class ReportGenerator:
             self._add_markdown_paragraph_to_word(doc, section.content)
             
             # 数据详情部分（与PDF格式保持一致）
+            # 注意：不再直接输出原始JSON，而是将数据转换为格式化的表格或文本
             if section.data:
-                data_text = json.dumps(section.data, indent=2, ensure_ascii=False)
-                # 检查数据是否非空
-                if data_text and data_text != '{}' and data_text != '[]':
-                    doc.add_paragraph().add_run("数据统计:").bold = True
-                    code_para = doc.add_paragraph(data_text)
-                    for run in code_para.runs:
-                        run.font.name = 'Courier New'
-                        run.font.size = Pt(8)
+                self._add_data_to_word(doc, section.data)
 
         # 总体摘要（与PDF格式保持一致）
         if report.summary:

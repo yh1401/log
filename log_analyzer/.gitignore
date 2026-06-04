@@ -35,24 +35,31 @@ logs/
 runtime/
 .cache/
 
-# User data
-users/*/uploads/*
-users/*/reports/*
-users/*/checkpoints/*
+# User data (runtime generated)
+users/
+data/action_logs/
+data/reports_db/
+data/backups/
+auth/
 
 # Test artifacts
 tests/logs/
 tests/performance/reports/
 
-# Backup files
-data/backups/
-data/reports_db/
-
 # Uploaded files
 uploads/
 
-# Debug data
-.dbg/
+# Reports (runtime generated)
+reports/
+
+# Checkpoints (runtime generated)
+checkpoints/
+
+# Log files (test data)
+logfile/
+*.pcap
+*.zip
+*.gz
 
 # OS files
 Thumbs.db
@@ -62,18 +69,12 @@ desktop.ini
 *.tmp
 *.bak
 *.swp
-
-# Checkpoints
-checkpoints/
-
-# Reports
-reports/
-
-# Backup files
 *.backup_*
-
-# Modified scripts
 modify_*.py
+optimized_prompt.md
 
-# Logfile directory
-logfile/
+# Configuration files
+config/config.local.json
+config/.env
+llmconfig
+backup/

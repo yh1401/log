@@ -1,0 +1,12 @@
+{
+  "task_id": "path_admin001_20260603_235759_409774",
+  "user_id": "admin001",
+  "status": "pending",
+  "progress": 0.0,
+  "message": "\u6b63\u5728\u51c6\u5907\u5904\u7406...",
+  "file_count": 1,
+  "total_size": 1525642,
+  "start_time": "2026-06-03T23:57:59.409854",
+  "source": "path",
+  "source_path": "/Users/a666/Documents/trae_projects/log/log_analyzer/logfile/data/pcap"
+}

@@ -1,0 +1,16 @@
+{
+  "task_id": "path_admin001_20260604_024901_833713",
+  "user_id": "admin001",
+  "status": "failed",
+  "progress": 0.0,
+  "message": "\u4efb\u52a1\u5931\u8d25: ChunkProcessor.__init__() got an unexpected keyword argument 'settings'",
+  "file_count": 1,
+  "total_size": 1525642,
+  "start_time": "2026-06-04T02:49:01.833777",
+  "source": "path",
+  "source_path": "/Users/a666/Documents/trae_projects/log/log_analyzer/logfile/data/pcap",
+  "files": [
+    "/Users/a666/Documents/trae_projects/log/log_analyzer/logfile/data/pcap/192.168.169.234-reboot-device.pcap"
+  ],
+  "error": "ChunkProcessor.__init__() got an unexpected keyword argument 'settings'"
+}

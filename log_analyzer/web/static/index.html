@@ -313,6 +313,14 @@
             accent-color: var(--apple-blue);
         }
 
+        .setting-hint {
+            line-height: 1.5;
+        }
+
+        .setting-hint strong {
+            color: var(--apple-blue);
+        }
+
         .actions-bar {
             display: flex;
             gap: 12px;
@@ -738,12 +746,51 @@
                 <button class="tab" data-tab="history">历史报告</button>
             </div>
 
+            <!-- 简单弹窗 -->
+            <div id="simpleModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center;">
+                <div style="background: white; padding: 20px; border-radius: 10px; max-width: 400px; width: 90%;">
+                    <h3>服务器路径读取</h3>
+                    <input type="text" id="pathInput" placeholder="输入路径，如 /var/log" style="width: 100%; padding: 8px; margin: 10px 0;">
+                    <div id="pathList" style="max-height: 200px; overflow-y: auto; margin: 10px 0;"></div>
+                    <button onclick="selectPath()">选择</button>
+                    <button onclick="closeSimpleModal()">关闭</button>
+                </div>
+            </div>
+
             <div id="upload-tab" class="tab-content active">
+                <!-- 上传区域 -->
                 <div class="upload-area" id="uploadArea">
                     <div class="upload-icon">📁</div>
                     <div class="upload-text">拖放文件到此处，或点击选择</div>
                     <div class="upload-hint">支持的文件类型：<span class="file-types">.log</span> <span class="file-types">.txt</span> <span class="file-types">.zip</span> <span class="file-types">.pcap</span></div>
                     <input type="file" id="fileInput" multiple accept=".log,.txt,.zip,.pcap">
+                </div>
+
+                <!-- 服务器路径读取入口（小型按钮形式） -->
+                <div style="margin-top: 16px; text-align: right; z-index: 100; position: relative;">
+                    <button 
+                        id="serverPathBtn" 
+                        style="
+                            display: inline-flex;
+                            align-items: center;
+                            gap: 6px;
+                            padding: 8px 14px;
+                            background: transparent;
+                            border: 1px solid #007AFF;
+                            border-radius: 8px;
+                            font-size: 0.875rem;
+                            color: #007AFF;
+                            cursor: pointer;
+                            transition: all 0.2s ease;
+                            z-index: 100;
+                            position: relative;
+                        "
+                        onmouseenter="this.style.borderColor='#007AFF'; this.style.color='#007AFF'; this.style.background='rgba(0,122,255,0.05)'"
+                        onmouseleave="this.style.borderColor='#007AFF'; this.style.color='#007AFF'; this.style.background='transparent'"
+                    >
+                        <span>🖥️</span>
+                        <span>从服务器路径读取</span>
+                    </button>
                 </div>
 
                 <div class="file-list" id="uploadedFiles"></div>
@@ -758,6 +805,21 @@
                             <input type="checkbox" id="forceRestart">
                             强制重新处理
                         </label>
+                    </div>
+                    <div class="setting-item">
+                        <label class="setting-label checkbox-label">
+                            <input type="checkbox" id="useLlm" checked>
+                            使用 LLM 分析（取消则使用规则模式）
+                        </label>
+                    </div>
+                    <div class="setting-hint" style="grid-column: 1 / -1; margin-top: 8px; padding: 12px; background: rgba(0, 113, 227, 0.05); border-radius: 8px; font-size: 0.8125rem; color: var(--apple-gray);">
+                        <strong>💡 分析模式说明：</strong>
+                        <div style="margin-top: 6px;">
+                            <strong>LLM 模式</strong>：深度语义分析，适合复杂问题诊断（响应较慢，5-30 秒/1000 条）
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <strong>规则模式</strong>：基于预定义规则快速分析，零成本（响应极快，&lt;1 秒/1000 条）
+                        </div>
                     </div>
                 </div>
 
@@ -820,19 +882,19 @@
                     </div>
                 </div>
 
-                <!-- 管理员功能卡片 -->
+                <!-- 功能卡片 -->
                 <div id="adminFunctions" class="admin-section" style="display: none;">
-                    <h3>⚙️ 管理员功能</h3>
+                    <h3>📊 数据查询</h3>
                     <div class="admin-grid">
                         <div class="admin-card" onclick="showAdminReportList()">
                             <div class="admin-card-icon">📋</div>
                             <div class="admin-card-title">历史报告管理</div>
-                            <div class="admin-card-desc">查看和管理所有历史报告</div>
+                            <div class="admin-card-desc">查看和管理我的历史报告</div>
                         </div>
                         <div class="admin-card" onclick="showActionLogs()">
                             <div class="admin-card-icon">📝</div>
                             <div class="admin-card-title">操作日志查询</div>
-                            <div class="admin-card-desc">查看用户操作历史记录</div>
+                            <div class="admin-card-desc">查看所有用户操作历史记录</div>
                         </div>
                         <div class="admin-card" onclick="showActionTypes()">
                             <div class="admin-card-icon">🏷️</div>
@@ -842,7 +904,7 @@
                         <div class="admin-card" onclick="showActionCount()">
                             <div class="admin-card-icon">📊</div>
                             <div class="admin-card-title">操作统计</div>
-                            <div class="admin-card-desc">统计用户操作记录数量</div>
+                            <div class="admin-card-desc">统计所有用户操作记录数量</div>
                         </div>
                     </div>
                 </div>
@@ -858,7 +920,174 @@
                 <!-- 历史报告列表 -->
                 <div class="history-section" id="historySection"></div>
 
-                <!-- 管理员报告列表模态框 -->
+                <!-- 服务器路径读取模态框 -->
+                <div id="serverPathModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center; backdrop-filter: blur(4px);" onclick="closeServerPathModal()">
+                    <div style="background: white; border-radius: 12px; padding: 24px; max-width: 480px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3); position: relative; z-index: 10000;" onclick="event.stopPropagation()">
+                        <!-- 头部 -->
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 1.5rem;">🖥️</span>
+                                <h2 style="font-size: 1.125rem; font-weight: 600; color: var(--apple-dark-gray);">服务器路径分析</h2>
+                            </div>
+                            <button 
+                                class="btn btn-secondary" 
+                                onclick="closeServerPathModal()"
+                                style="padding: 6px 12px; font-size: 0.875rem;"
+                            >
+                                关闭
+                            </button>
+                        </div>
+
+                        <!-- 授权状态提示 -->
+                        <div id="authorizedPathBanner" style="
+                            display: none;
+                            padding: 12px 16px;
+                            background: rgba(52, 199, 89, 0.08);
+                            border: 1px solid rgba(52, 199, 89, 0.3);
+                            border-radius: calc(var(--apple-radius) - 4px);
+                            margin-bottom: 16px;
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                        ">
+                            <span style="font-size: 1.25rem;">✅</span>
+                            <div>
+                                <div style="font-size: 0.875rem; font-weight: 500; color: var(--apple-dark-gray);">已授权目录</div>
+                                <div style="font-size: 0.8125rem; color: var(--apple-gray);" id="authorizedPathText">/var/log/</div>
+                            </div>
+                            <button 
+                                onclick="refreshAuthorizedPath()"
+                                style="margin-left: auto; padding: 4px 8px; font-size: 0.75rem;"
+                            >
+                                🔄 刷新
+                            </button>
+                        </div>
+
+                        <!-- 路径输入区域 -->
+                        <div>
+                            <label class="setting-label" style="display: block; margin-bottom: 8px;">
+                                服务器路径 
+                                <span style="color: var(--apple-error);">*</span>
+                            </label>
+                            <div style="position: relative;">
+                                <input 
+                                    type="text" 
+                                    id="serverPathInput" 
+                                    class="setting-input" 
+                                    style="width: 100%; padding-right: 80px;"
+                                    placeholder="/var/log/nginx/error.log"
+                                >
+                                <button 
+                                    class="btn btn-secondary" 
+                                    onclick="browseServerFiles()"
+                                    style="position: absolute; right: 42px; top: 50%; transform: translateY(-50%); padding: 4px 10px; font-size: 0.75rem;"
+                                >
+                                    浏览
+                                </button>
+                                <button 
+                                    class="btn btn-primary" 
+                                    onclick="validateServerPath()"
+                                    id="validateBtn"
+                                    style="position: absolute; right: 4px; top: 50%; transform: translateY(-50%); padding: 4px 10px; font-size: 0.75rem;"
+                                >
+                                    验证
+                                </button>
+                            </div>
+                            <div style="font-size: 0.75rem; color: var(--apple-gray); margin-top: 4px;">
+                                输入服务器上的日志文件或目录路径
+                            </div>
+                        </div>
+
+                        <!-- 验证结果提示 -->
+                        <div id="validationResult" style="
+                            display: none;
+                            padding: 10px 12px;
+                            border-radius: calc(var(--apple-radius) - 4px);
+                            margin-top: 12px;
+                            font-size: 0.8125rem;
+                        "></div>
+
+                        <!-- 高级选项（折叠式） -->
+                        <div style="margin-top: 16px;">
+                            <button 
+                                onclick="toggleAdvancedOptions()"
+                                style="
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 6px;
+                                    padding: 6px 0;
+                                    background: none;
+                                    border: none;
+                                    color: var(--apple-gray);
+                                    font-size: 0.875rem;
+                                    cursor: pointer;
+                                "
+                            >
+                                <span id="advancedToggleIcon">▼</span>
+                                <span>高级选项</span>
+                            </button>
+                            <div id="advancedOptions" style="display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--apple-border-color);">
+                                <!-- 递归读取选项 -->
+                                <div style="margin-bottom: 12px;">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="recursiveOption" checked>
+                                        <span>递归读取子目录</span>
+                                    </label>
+                                </div>
+
+                                <!-- 文件匹配模式 -->
+                                <div style="margin-bottom: 12px;">
+                                    <label class="setting-label" style="display: block; margin-bottom: 6px;">文件匹配模式</label>
+                                    <input 
+                                        type="text" 
+                                        id="filePatternInput" 
+                                        class="setting-input" 
+                                        value="*.log, *.txt, *.pcap, *.pcapng"
+                                        placeholder="例如: *.log, *.txt, *.pcap"
+                                    >
+                                </div>
+
+                                <!-- 最大文件大小 -->
+                                <div>
+                                    <label class="setting-label" style="display: block; margin-bottom: 6px;">最大文件大小 (MB)</label>
+                                    <input 
+                                        type="number" 
+                                        id="maxFileSizeInput" 
+                                        class="setting-input" 
+                                        value="500"
+                                        min="1"
+                                        max="10000"
+                                    >
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 预览文件列表 -->
+                        <div id="previewFilesContainer" style="display: none; margin-top: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <div style="font-size: 0.875rem; font-weight: 500; color: var(--apple-dark-gray);">📋 检测到的文件</div>
+                                <div style="font-size: 0.75rem; color: var(--apple-gray);" id="previewFileCount">0 个文件</div>
+                            </div>
+                            <div id="previewFilesList" style="max-height: 120px; overflow-y: auto; background: var(--apple-light-gray); padding: 10px; border-radius: calc(var(--apple-radius) - 4px);"></div>
+                        </div>
+
+                        <!-- 操作按钮 -->
+                        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--apple-border-color);">
+                            <button class="btn btn-secondary" onclick="closeServerPathModal()">取消</button>
+                            <button 
+                                class="btn btn-primary" 
+                                id="serverPathSubmitBtn" 
+                                onclick="console.log('serverPathSubmitBtn clicked'); processServerPath()"
+                                disabled
+                            >
+                                <span id="submitBtnIcon">🚀</span>
+                                <span>开始分析</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 历史报告列表模态框 -->
                 <div id="adminReportModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;" onclick="closeAdminModal()">
                     <div style="background: white; border-radius: var(--apple-radius); padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;" onclick="event.stopPropagation()">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
@@ -978,7 +1207,591 @@
         async function init() {
             await loadHistory();
             await tryResumeActiveTask();
+            initServerPathFeature();
         }
+
+        // === 服务器路径读取功能 ===
+        let validatedPath = null;
+        let authorizedDirs = [];
+
+        function initServerPathFeature() {
+            // 加载已授权目录
+            loadAuthorizedDirectories();
+            
+            // 确保按钮点击事件正确绑定
+            const serverPathBtn = document.getElementById('serverPathBtn');
+            if (serverPathBtn) {
+                // 移除可能存在的重复绑定
+                serverPathBtn.removeEventListener('click', showServerPathModal);
+                serverPathBtn.addEventListener('click', showServerPathModal);
+                console.log('Server path button event listener added');
+            } else {
+                console.error('Server path button not found');
+            }
+        }
+
+        async function loadAuthorizedDirectories() {
+            try {
+                // 使用单一接口获取授权目录
+                const response = await apiRequest('/api/list-dir', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        path: '/',
+                        validate_only: false
+                    })
+                });
+                const result = await response.json();
+                if (result.code === 0) {
+                    // 成功则说明权限正常
+                    showAuthorizedBanner('已授权');
+                } else if (result.code === 1 && result.message.includes('不在允许访问的目录范围内')) {
+                    // 提取允许的目录信息
+                    const match = result.message.match(/允许的目录：(.+)/);
+                    if (match) {
+                        const dirs = match[1].split(',').map(d => d.trim());
+                        if (dirs.length > 0) {
+                            showAuthorizedBanner(dirs[0]);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn('加载授权目录失败:', error);
+            }
+        }
+
+        function showAuthorizedBanner(path) {
+            const banner = document.getElementById('authorizedPathBanner');
+            const pathText = document.getElementById('authorizedPathText');
+            if (banner && pathText) {
+                pathText.textContent = path;
+                banner.style.display = 'flex';
+            }
+        }
+
+        function refreshAuthorizedPath() {
+            loadAuthorizedDirectories();
+            // 清空验证状态
+            validatedPath = null;
+            document.getElementById('serverPathSubmitBtn').disabled = true;
+            hideValidationResult();
+        }
+
+        function showServerPathModal() {
+            console.log('showServerPathModal called');
+            // 直接打开文件浏览器，显示根目录
+            browseServerFiles();
+        }
+
+        function closeServerPathModal() {
+            document.getElementById('serverPathModal').style.display = 'none';
+            document.getElementById('previewFilesContainer').style.display = 'none';
+            document.getElementById('validationResult').style.display = 'none';
+            validatedPath = null;
+        }
+
+        function toggleAdvancedOptions() {
+            const options = document.getElementById('advancedOptions');
+            const icon = document.getElementById('advancedToggleIcon');
+            if (options.style.display === 'none' || options.style.display === '') {
+                options.style.display = 'block';
+                icon.textContent = '▲';
+            } else {
+                options.style.display = 'none';
+                icon.textContent = '▼';
+            }
+        }
+
+        async function validateServerPath() {
+            const path = document.getElementById('serverPathInput').value.trim();
+            if (!path) {
+                showValidationResult('error', '请输入服务器路径');
+                return;
+            }
+
+            const validateBtn = document.getElementById('validateBtn');
+            validateBtn.disabled = true;
+            validateBtn.textContent = '验证中...';
+
+            try {
+                const response = await apiRequest('/api/list-dir', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        path: path,
+                        recursive: document.getElementById('recursiveOption').checked,
+                        file_patterns: parseFilePatterns(document.getElementById('filePatternInput').value),
+                        validate_only: true  // 仅验证模式
+                    })
+                });
+
+                const result = await response.json();
+                
+                if (result.code === 0 && result.data) {
+                    validatedPath = path;
+                    showValidationResult('success', `✓ 路径有效，检测到 ${result.data.file_count} 个文件`);
+                    document.getElementById('serverPathSubmitBtn').disabled = false;
+                    
+                    // 显示文件预览
+                    if (result.data.files && result.data.files.length > 0) {
+                        showFilePreview(result.data.files);
+                    }
+                } else {
+                    showValidationResult('error', result.message || '路径验证失败');
+                    document.getElementById('serverPathSubmitBtn').disabled = true;
+                }
+            } catch (error) {
+                showValidationResult('error', '验证失败：' + error.message);
+                document.getElementById('serverPathSubmitBtn').disabled = true;
+            } finally {
+                validateBtn.disabled = false;
+                validateBtn.textContent = '验证';
+            }
+        }
+
+        function showValidationResult(type, message) {
+            const container = document.getElementById('validationResult');
+            container.style.display = 'block';
+            
+            if (type === 'success') {
+                container.style.background = 'rgba(52, 199, 89, 0.08)';
+                container.style.border = '1px solid rgba(52, 199, 89, 0.3)';
+                container.style.color = '#34c759';
+            } else {
+                container.style.background = 'rgba(255, 59, 48, 0.08)';
+                container.style.border = '1px solid rgba(255, 59, 48, 0.3)';
+                container.style.color = '#ff3b30';
+            }
+            container.textContent = message;
+        }
+
+        function hideValidationResult() {
+            document.getElementById('validationResult').style.display = 'none';
+        }
+
+        function showFilePreview(files) {
+            const container = document.getElementById('previewFilesContainer');
+            const list = document.getElementById('previewFilesList');
+            const count = document.getElementById('previewFileCount');
+
+            count.textContent = `${files.length} 个文件`;
+            list.innerHTML = files.slice(0, 15).map(file => `
+                <div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--apple-border-color);">
+                    <span style="font-size: 0.75rem;">📄 ${file.name}</span>
+                    <span style="font-size: 0.7rem; color: var(--apple-gray);">${file.size_str || file.size}</span>
+                </div>
+            `).join('');
+
+            if (files.length > 15) {
+                list.innerHTML += `
+                    <div style="padding: 6px; text-align: center; color: var(--apple-gray); font-size: 0.7rem;">
+                        ... 还有 ${files.length - 15} 个文件
+                    </div>
+                `;
+            }
+
+            container.style.display = 'block';
+        }
+
+        async function browseServerFiles() {
+            const browseModal = document.createElement('div');
+            browseModal.id = 'browseServerModal';
+            browseModal.innerHTML = `
+                <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1010; justify-content: center; align-items: center; display: flex;">
+                    <div style="background: white; border-radius: var(--apple-radius); padding: 20px; max-width: 700px; width: 90%; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="font-size: 1rem; font-weight: 600;">浏览服务器目录</h3>
+                            <button class="btn btn-secondary" id="browseCloseBtn" style="padding: 4px 10px; font-size: 0.8125rem;">关闭</button>
+                        </div>
+                        <!-- 路径输入框 -->
+                        <div style="margin-bottom: 12px;">
+                            <div style="display: flex; gap: 8px;">
+                                <input 
+                                    type="text" 
+                                    id="browsePathInput" 
+                                    class="setting-input" 
+                                    style="flex: 1; padding: 8px 12px; font-family: monospace; font-size: 0.875rem;"
+                                    placeholder="输入绝对路径，如 /Users/a666/Documents/logs"
+                                >
+                                <button 
+                                    class="btn btn-primary" 
+                                    id="browseGoBtn"
+                                    style="padding: 8px 16px; font-size: 0.875rem;"
+                                >
+                                    跳转
+                                </button>
+                            </div>
+                            <div id="browsePathError" style="display: none; color: var(--apple-error); font-size: 0.75rem; margin-top: 4px;"></div>
+                        </div>
+                        <div style="flex: 1; overflow-y: auto; background: var(--apple-light-gray); padding: 12px; border-radius: calc(var(--apple-radius) - 4px);" id="browseContent">
+                            <div style="color: var(--apple-gray); text-align: center; padding: 20px;">加载中...</div>
+                        </div>
+                        <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+                            <button class="btn btn-primary" id="selectPathBtn" disabled style="opacity: 0.5; cursor: not-allowed;">选择此路径</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(browseModal);
+
+            // 添加事件监听器
+            const closeBtn = document.getElementById('browseCloseBtn');
+            const selectBtn = document.getElementById('selectPathBtn');
+            const pathInput = document.getElementById('browsePathInput');
+            const goBtn = document.getElementById('browseGoBtn');
+            
+            if (closeBtn) {
+                closeBtn.addEventListener('click', closeBrowseModal);
+            }
+            
+            // 路径跳转功能
+            const navigateToPath = async () => {
+                const path = pathInput.value.trim();
+                if (!path) {
+                    showBrowseError('请输入路径');
+                    return;
+                }
+                
+                // 隐藏错误提示
+                document.getElementById('browsePathError').style.display = 'none';
+                
+                try {
+                    await loadDirectoryContents(path, 'browseContent');
+                } catch (error) {
+                    showBrowseError(error.message || '路径无效或无法访问');
+                }
+            };
+            
+            if (goBtn) {
+                goBtn.addEventListener('click', navigateToPath);
+            }
+            
+            if (pathInput) {
+                pathInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        navigateToPath();
+                    }
+                });
+            }
+            
+            // 显示路径错误提示
+            const showBrowseError = (message) => {
+                const errorDiv = document.getElementById('browsePathError');
+                errorDiv.textContent = message;
+                errorDiv.style.display = 'block';
+            }
+            
+            if (selectBtn) {
+                selectBtn.addEventListener('click', selectCurrentPath);
+            }
+
+            await loadDirectoryContents('/', 'browseContent');
+        }
+
+        function closeBrowseModal() {
+            const modal = document.getElementById('browseServerModal');
+            if (modal) {
+                document.body.removeChild(modal);
+            }
+        }
+
+        async function loadDirectoryContents(path, containerId) {
+            try {
+                const response = await apiRequest('/api/list-dir', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        path: path,
+                        recursive: false,
+                        file_patterns: []
+                    })
+                });
+
+                const result = await response.json();
+                const container = document.getElementById(containerId);
+                
+                if (result.code === 0 && result.data) {
+                    const parentPath = result.data.parent_path;
+                    const files = result.data.files || [];
+                    
+                    let html = '';
+                    
+                    // 显示上级目录
+                    if (parentPath) {
+                        html += `
+                            <div 
+                                style="padding: 8px 10px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; gap: 8px;"
+                                onmouseenter="this.style.background='rgba(0,0,0,0.05)'"
+                                onmouseleave="this.style.background='transparent'"
+                                onclick="loadDirectoryContents('${parentPath}', '${containerId}')"
+                            >
+                                <span>📁</span>
+                                <span style="font-size: 0.875rem; color: var(--apple-blue);">.. (上级目录)</span>
+                            </div>
+                        `;
+                    }
+
+                    // 显示当前目录路径
+                    html += `
+                        <div style="padding: 8px 10px; font-size: 0.75rem; color: var(--apple-gray); border-bottom: 1px solid var(--apple-border-color); margin-bottom: 8px;">
+                            当前路径: ${path}
+                        </div>
+                    `;
+
+                    // 显示目录和文件
+                    files.forEach(item => {
+                        const icon = item.type === 'directory' ? '📁' : '📄';
+                        const color = item.type === 'directory' ? 'var(--apple-blue)' : 'var(--apple-gray)';
+                        const clickHandler = item.type === 'directory' 
+                            ? `onclick="loadDirectoryContents('${item.path}', '${containerId}')"` 
+                            : '';
+                        const cursor = item.type === 'directory' ? 'cursor: pointer' : '';
+                        
+                        html += `
+                            <div 
+                                style="padding: 8px 10px; border-radius: 6px; display: flex; align-items: center; gap: 8px; ${cursor}"
+                                ${clickHandler}
+                                onmouseenter="this.style.background='rgba(0,0,0,0.05)'"
+                                onmouseleave="this.style.background='transparent'"
+                            >
+                                <span>${icon}</span>
+                                <span style="font-size: 0.875rem; color: ${color};">${item.name}</span>
+                                ${item.size_str ? `<span style="margin-left: auto; font-size: 0.75rem; color: var(--apple-gray);">${item.size_str}</span>` : ''}
+                            </div>
+                        `;
+                    });
+
+                    container.innerHTML = html;
+
+                    // 更新路径输入框
+                    const pathInput = document.getElementById('browsePathInput');
+                    if (pathInput) {
+                        pathInput.value = path;
+                    }
+                    
+                    // 清除路径错误提示
+                    const errorDiv = document.getElementById('browsePathError');
+                    if (errorDiv) {
+                        errorDiv.style.display = 'none';
+                    }
+
+                    // 更新选择按钮
+                    const selectBtn = document.getElementById('selectPathBtn');
+                    console.log('Updating select button:', selectBtn);
+                    if (selectBtn) {
+                        selectBtn.disabled = false;
+                        selectBtn.style.opacity = '1';
+                        selectBtn.style.cursor = 'pointer';
+                        selectBtn.setAttribute('data-path', path);
+                        console.log('Select button enabled, data-path:', path);
+                    } else {
+                        console.error('selectPathBtn not found when updating');
+                    }
+                } else {
+                    container.innerHTML = `<div style="color: var(--apple-error); text-align: center; padding: 20px;">${result.message || '加载失败'}</div>`;
+                }
+            } catch (error) {
+                document.getElementById(containerId).innerHTML = `<div style="color: var(--apple-error); text-align: center; padding: 20px;">加载失败: ${error.message}</div>`;
+            }
+        }
+
+        function selectCurrentPath() {
+            console.log('selectCurrentPath called');
+            const selectBtn = document.getElementById('selectPathBtn');
+            console.log('selectBtn:', selectBtn);
+            
+            if (selectBtn) {
+                const path = selectBtn.getAttribute('data-path');
+                console.log('Selected path:', path);
+                
+                if (path) {
+                    // 显示确认对话框
+                    const confirmModal = document.createElement('div');
+                    confirmModal.id = 'confirmPathModal';
+                    confirmModal.innerHTML = `
+                        <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1020; justify-content: center; align-items: center; display: flex;">
+                            <div style="background: white; border-radius: var(--apple-radius); padding: 24px; max-width: 400px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                                    <h3 style="font-size: 1rem; font-weight: 600;">确认路径</h3>
+                                    <button class="btn btn-secondary" onclick="document.getElementById('confirmPathModal').remove()" style="padding: 4px 10px; font-size: 0.8125rem;">关闭</button>
+                                </div>
+                                <div style="margin-bottom: 20px;">
+                                    <div style="font-size: 0.875rem; color: var(--apple-gray); margin-bottom: 8px;">您选择的路径：</div>
+                                    <div style="background: var(--apple-light-gray); padding: 12px; border-radius: calc(var(--apple-radius) - 4px); font-family: monospace; font-size: 0.875rem; word-break: break-all;">${path}</div>
+                                    <div style="font-size: 0.75rem; color: var(--apple-gray); margin-top: 8px;">此路径将被用于分析日志文件</div>
+                                </div>
+                                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                                    <button class="btn btn-secondary" onclick="document.getElementById('confirmPathModal').remove()">取消</button>
+                                    <button class="btn btn-primary" onclick="confirmAndProcessPath('${path}')">确认并开始分析</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    document.body.appendChild(confirmModal);
+                } else {
+                    console.error('Path is empty or null');
+                }
+            } else {
+                console.error('selectPathBtn not found');
+            }
+        }
+        
+        function confirmAndProcessPath(path) {
+            console.log('confirmAndProcessPath called with path:', path);
+            
+            // 关闭确认对话框
+            const confirmModal = document.getElementById('confirmPathModal');
+            if (confirmModal) {
+                confirmModal.remove();
+                console.log('confirmPathModal removed');
+            }
+            
+            // 关闭浏览模态框
+            const browseModal = document.getElementById('browseServerModal');
+            if (browseModal) {
+                browseModal.remove();
+                console.log('browseServerModal removed');
+            }
+            
+            // 直接设置验证路径并开始分析，跳过中间模态框
+            validatedPath = path;
+            console.log('validatedPath set to:', path);
+            
+            // 直接调用处理函数
+            processServerPath();
+            console.log('processServerPath called directly');
+        }
+
+        // 显示模态框并自动验证路径
+        function showServerPathModalWithPath(path) {
+            console.log('showServerPathModalWithPath called with path:', path);
+            const modal = document.getElementById('serverPathModal');
+            console.log('serverPathModal:', modal);
+            
+            if (modal) {
+                modal.style.display = 'flex';
+                console.log('Modal displayed');
+                
+                const input = document.getElementById('serverPathInput');
+                if (input) {
+                    input.value = path;
+                    console.log('Path set to input in modal');
+                }
+                
+                // 立即自动验证
+                validateServerPath();
+            } else {
+                console.error('serverPathModal not found');
+            }
+        }
+
+        function parseFilePatterns(patternStr) {
+            if (!patternStr || !patternStr.trim()) {
+                return ['*.log'];
+            }
+            return patternStr.split(',').map(p => p.trim()).filter(p => p);
+        }
+
+        async function processServerPath() {
+            console.log('processServerPath called, validatedPath:', validatedPath);
+            if (!validatedPath) {
+                console.error('validatedPath is null or undefined');
+                alert('请先验证路径');
+                return;
+            }
+
+            const path = validatedPath;
+            const chunkSize = parseInt(document.getElementById('chunkSize').value);
+            const forceRestart = document.getElementById('forceRestart').checked;
+            const useLlm = document.getElementById('useLlm').checked;
+            const recursive = document.getElementById('recursiveOption').checked;
+            const maxFileSizeMb = parseInt(document.getElementById('maxFileSizeInput').value);
+            const filePatterns = parseFilePatterns(document.getElementById('filePatternInput').value);
+
+            closeServerPathModal();
+
+            const progressContainer = document.getElementById('progressContainer');
+            progressContainer.classList.add('active');
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('reportsContainer').innerHTML = '';
+            document.getElementById('errorMessage').style.display = 'none';
+            hideReconnectBanner();
+
+            resetStages();
+            setStage(0, `扫描路径: ${path}`);
+            document.getElementById('statusText').textContent = `正在扫描服务器路径: ${path}`;
+
+            try {
+                const response = await apiRequest('/api/process-from-path', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        path: path,
+                        recursive: recursive,
+                        file_patterns: filePatterns,
+                        max_file_size: maxFileSizeMb * 1024 * 1024,
+                        chunk_size: chunkSize,
+                        force_restart: forceRestart,
+                        use_llm: useLlm
+                    })
+                });
+
+                const result = await response.json();
+                if (result.code !== 0) {
+                    throw new Error(result.message || '处理失败');
+                }
+
+                currentTaskId = result.data.task_id;
+                const totalFiles = result.data.total_files || 1;
+
+                saveActiveTask({
+                    task_id: currentTaskId,
+                    user_id: getCurrentUserId(),
+                    file_name: path,
+                    file_path: path,
+                    total_files: totalFiles,
+                    processed_files: 0,
+                    status: 'pending',
+                    stage_index: 0,
+                    stage_detail: `已扫描到 ${totalFiles} 个文件`,
+                    created_at: Date.now()
+                });
+
+                await pollTaskUntilDone({
+                    task_id: currentTaskId,
+                    user_id: getCurrentUserId(),
+                    file_name: path,
+                    file_path: path,
+                    total_files: totalFiles,
+                    processed_files: 0,
+                    status: 'pending',
+                    stage_index: 0,
+                    stage_detail: `已扫描到 ${totalFiles} 个文件`,
+                    created_at: Date.now()
+                });
+
+                document.getElementById('statusText').textContent = `分析完成 (${currentTaskId})`;
+                document.getElementById('startBtn').disabled = false;
+                await loadHistory();
+
+            } catch (error) {
+                console.error('处理服务器路径失败:', error);
+                document.getElementById('errorMessage').textContent = `处理失败: ${error.message}`;
+                document.getElementById('errorMessage').style.display = 'block';
+                document.getElementById('startBtn').disabled = false;
+                resetStages();
+            }
+        }
+
+        // === 服务器路径读取功能结束 ===
 
         async function tryResumeActiveTask() {
             const taskInfo = loadActiveTask();
@@ -1100,13 +1913,8 @@
                 const formData = new FormData();
                 formData.append('file', file);
 
-                const userId = getCurrentUserId();
-
-                const response = await fetch('/api/upload', {
+                const response = await apiRequest('/api/upload', {
                     method: 'POST',
-                    headers: {
-                        'X-User-Id': userId
-                    },
                     body: formData
                 });
 
@@ -1199,9 +2007,11 @@
         function updateStartButton() {
             const btn = document.getElementById('startBtn');
             btn.disabled = selectedFiles.length === 0;
+            const useLlm = document.getElementById('useLlm').checked;
+            const modeText = useLlm ? 'LLM 分析' : '规则模式';
             btn.textContent = selectedFiles.length > 1
-                ? `开始分析 (${selectedFiles.length} 个文件)`
-                : '开始分析';
+                ? `开始${modeText} (${selectedFiles.length} 个文件)`
+                : `开始${modeText}`;
         }
 
         function clearSelection() {
@@ -1250,6 +2060,7 @@
 
             const chunkSize = parseInt(document.getElementById('chunkSize').value);
             const forceRestart = document.getElementById('forceRestart').checked;
+            const useLlm = document.getElementById('useLlm').checked;
 
             const progressContainer = document.getElementById('progressContainer');
             progressContainer.classList.add('active');
@@ -1274,16 +2085,16 @@
                     setStage(0, `处理文件 ${i + 1}/${totalFiles}: ${file.name}`);
                     document.getElementById('statusText').textContent = `正在处理文件 ${i + 1}/${totalFiles}: ${file.name}`;
 
-                    const response = await fetch('/api/process', {
+                    const response = await apiRequest('/api/process', {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json',
-                            'X-User-Id': getCurrentUserId()
+                            'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
                             file_path: file.path,
                             chunk_size: chunkSize,
-                            force_restart: forceRestart
+                            force_restart: forceRestart,
+                            use_llm: useLlm
                         })
                     });
 
@@ -1321,9 +2132,7 @@
                         created_at: Date.now()
                     });
 
-                    const taskResponse = await fetch(buildTaskUrl(currentTaskId), {
-                        headers: { 'X-User-Id': getCurrentUserId() }
-                    });
+                    const taskResponse = await apiRequest(buildTaskUrl(currentTaskId));
                     const task = await taskResponse.json();
 
                     if (task.data && task.data.reports && task.data.reports.length > 0) {
@@ -1396,9 +2205,7 @@
                 const tick = async () => {
                     if (isResolved) return;
                     try {
-                        const response = await fetch(buildTaskUrl(taskInfo.task_id), {
-                            headers: { 'X-User-Id': getCurrentUserId() }
-                        });
+                        const response = await apiRequest(buildTaskUrl(taskInfo.task_id));
                         if (!response.ok) {
                             throw new Error(`HTTP ${response.status}`);
                         }
@@ -1519,7 +2326,7 @@
 
         async function loadHistory() {
             try {
-                const response = await fetch('/api/reports');
+                const response = await apiRequest('/api/reports');
                 const data = await response.json();
                 // 正确解析后端返回的格式
                 const reports = data.data && data.data.reports ? data.data.reports : [];
@@ -1596,10 +2403,27 @@
             });
         });
 
+        // ==================== API 请求工具函数 ====================
+        
+        async function apiRequest(url, options = {}) {
+            const headers = {
+                'X-User-Id': getCurrentUserId(),
+                'X-Username': getCurrentUserName() || '',
+                ...options.headers
+            };
+            
+            const response = await fetch(url, {
+                ...options,
+                headers
+            });
+            
+            return response;
+        }
+
         // ==================== 管理员模式功能 ====================
 
         const ADMIN_USER_ID = 'admin001';
-        const ADMIN_USERNAME = 'useradmin';
+        const ADMIN_USERNAME = 'admin';
         const ADMIN_ENTRY_USER = 'hanmeimei'; // 仅允许此用户看到管理员入口
 
         function isAdminMode() {
@@ -1646,28 +2470,22 @@
             const adminSwitch = document.getElementById('adminSwitch');
             const historySection = document.getElementById('historySection');
 
-            if (isAdmin) {
-                adminSection.style.display = 'block';
-                adminFunctions.style.display = 'block';
-                adminSwitch.style.display = 'none';
-                historySection.style.display = 'block';
-            } else {
-                adminSection.style.display = 'none';
-                adminFunctions.style.display = 'none';
-                // 仅允许特定用户看到管理员切换入口
-                adminSwitch.style.display = canSeeAdminEntry ? 'block' : 'none';
-                historySection.style.display = 'block';
-            }
+            // 管理员控制台只对管理员可见
+            adminSection.style.display = isAdmin ? 'block' : 'none';
+            
+            // 操作日志、操作统计等功能对所有用户可见
+            adminFunctions.style.display = 'block';
+            
+            // 管理员切换入口只对特定用户可见
+            adminSwitch.style.display = (!isAdmin && canSeeAdminEntry) ? 'block' : 'none';
+            
+            // 历史报告列表始终可见
+            historySection.style.display = 'block';
         }
 
         async function showAdminReportList() {
             try {
-                const response = await fetch('/api/history/reports', {
-                    headers: {
-                        'X-User-Id': ADMIN_USER_ID,
-                        'X-Username': ADMIN_USERNAME
-                    }
-                });
+                const response = await apiRequest('/api/history/reports');
                 const result = await response.json();
                 
                 if (result.code !== 0) {
@@ -1710,12 +2528,7 @@
 
         async function viewAdminReport(reportId) {
             try {
-                const response = await fetch(`/api/history/reports/${reportId}`, {
-                    headers: {
-                        'X-User-Id': ADMIN_USER_ID,
-                        'X-Username': ADMIN_USERNAME
-                    }
-                });
+                const response = await apiRequest(`/api/history/reports/${reportId}`);
                 const result = await response.json();
                 
                 if (result.code !== 0) {
@@ -1735,12 +2548,8 @@
             }
 
             try {
-                const response = await fetch(`/api/history/reports/${reportId}`, {
-                    method: 'DELETE',
-                    headers: {
-                        'X-User-Id': ADMIN_USER_ID,
-                        'X-Username': ADMIN_USERNAME
-                    }
+                const response = await apiRequest(`/api/history/reports/${reportId}`, {
+                    method: 'DELETE'
                 });
                 const result = await response.json();
                 
@@ -1763,7 +2572,7 @@
 
         async function loadActionTypes() {
             try {
-                const response = await fetch('/api/history/actions/types');
+                const response = await apiRequest('/api/history/actions/types');
                 const result = await response.json();
                 
                 if (result.code === 0) {
@@ -1787,12 +2596,10 @@
                 const endTime = document.getElementById('logEndTime').value;
                 const actionType = document.getElementById('logActionType').value;
 
-                const response = await fetch('/api/history/actions', {
+                const response = await apiRequest('/api/history/actions', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        'X-User-Id': ADMIN_USER_ID,
-                        'X-Username': ADMIN_USERNAME
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
                         start_time: startTime || undefined,
@@ -1887,12 +2694,8 @@
             }
 
             try {
-                const response = await fetch(`/api/history/actions/${actionId}`, {
-                    method: 'DELETE',
-                    headers: {
-                        'X-User-Id': ADMIN_USER_ID,
-                        'X-Username': ADMIN_USERNAME
-                    }
+                const response = await apiRequest(`/api/history/actions/${actionId}`, {
+                    method: 'DELETE'
                 });
                 const result = await response.json();
                 
@@ -1909,7 +2712,7 @@
 
         async function showActionTypes() {
             try {
-                const response = await fetch('/api/history/actions/types');
+                const response = await apiRequest('/api/history/actions/types');
                 const result = await response.json();
                 
                 if (result.code !== 0) {
@@ -1930,12 +2733,7 @@
 
         async function showActionCount() {
             try {
-                const response = await fetch('/api/history/actions/count', {
-                    headers: {
-                        'X-User-Id': ADMIN_USER_ID,
-                        'X-Username': ADMIN_USERNAME
-                    }
-                });
+                const response = await apiRequest('/api/history/actions/count');
                 const result = await response.json();
                 
                 if (result.code !== 0) {
@@ -1943,7 +2741,29 @@
                     return;
                 }
 
-                alert(`操作记录总数: ${result.data.count} 条`);
+                if (result.data.type_counts || result.data.user_counts) {
+                    let countInfo = `操作记录统计:\n\n`;
+                    countInfo += `总记录数: ${result.data.count} 条\n\n`;
+                    
+                    if (result.data.type_counts) {
+                        countInfo += `按类型统计:\n`;
+                        for (const [type, count] of Object.entries(result.data.type_counts)) {
+                            countInfo += `  ${type}: ${count} 条\n`;
+                        }
+                        countInfo += '\n';
+                    }
+                    
+                    if (result.data.user_counts) {
+                        countInfo += `按用户统计:\n`;
+                        for (const [userId, count] of Object.entries(result.data.user_counts)) {
+                            countInfo += `  ${userId}: ${count} 条\n`;
+                        }
+                    }
+                    
+                    alert(countInfo);
+                } else {
+                    alert(`操作记录总数: ${result.data.count} 条`);
+                }
             } catch (error) {
                 alert('获取统计失败: ' + error.message);
             }
@@ -1953,6 +2773,11 @@
             document.getElementById('adminReportModal').style.display = 'none';
             document.getElementById('actionLogModal').style.display = 'none';
         }
+
+        // 监听 LLM/规则模式切换
+        document.getElementById('useLlm').addEventListener('change', function() {
+            updateStartButton();
+        });
 
         init();
     </script>

@@ -67,7 +67,7 @@ def run_optimized_test(file_path: str) -> PerformanceTestResult:
         load_llm_config = config_module.load_llm_config
         
         init_settings()
-        llm_config = load_llm_config("/Users/a666/Documents/trae_projects/log/loggen/llm/llmconfig")
+        llm_config = load_llm_config("/Users/a666/Documents/trae_projects/log/log_analyzer/llmconfig")
         
         parser = LogParser(chunk_size=10000)
         llm_client = LLMClient(llm_config)

@@ -18,22 +18,178 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.5.1] - 2026-06-04
+
+### Added
+- **提示词库管理文档**：
+  - 新建 `docs/PROMPTS.md`，汇总并优化所有 LLM 提示词
+  - 包含日志分析提示词和 PCAP 网络分析提示词
+  - 提供提示词设计原则和维护建议
+
+### Changed
+- **文档精简与整合**：
+  - 删除冗余和临时文档：SUMMARY.md、Architecture_Refactoring_Plan.md、Code_Comparison_and_Improvements.md、LANGCHAIN_COMPARISON_EVALUATION.md、QUICKSTART_SERVER_PATH.md、SERVER_PATH_SINGLE_API.md、history_records_postman_collection.json、server_path_feature.md、table_schema.md
+  - 更新 README.md，将分散的文档内容整合
+  - 保留核心文档：USER_GUIDE.md、DEVELOPER_GUIDE.md、RULE_MODE_GUIDE.md、API.md、CHANGELOG.md、QUICK_REFERENCE.md、PROMPTS.md、PROJECT_OVERVIEW.md
+
+### Fixed
+- **路径读取任务处理逻辑修复**：
+  - 修复 `process_files_from_path` 函数中的 Logger 变量名错误：logger → task_logger
+  - 完全重构路径任务处理流程，与上传文件处理流程保持一致
+  - 正确初始化 ChunkProcessor，包含 parser、checkpoint_manager、enable_checkpoint 等参数
+  - 支持 PCAP 文件处理逻辑，与上传功能一致
+  - 修复报告保存路径问题，使用正确的 ReportGenerator 初始化
+
+---
+
+## [2.5.0] - 2026-06-04
+
+### Added
+- **操作日志埋点功能**：
+  - 文件上传时记录 `file_upload` 操作
+  - 任务开始时记录 `task_start` 操作
+  - 任务完成时记录 `task_complete` 操作
+  - 任务失败时记录 `task_failed` 操作
+  - 日志存储路径：`data/action_logs/{user_id}/{date}.json`
+
+- **通用API请求函数**：
+  - 新增 `apiRequest()` 函数，自动设置用户请求头
+  - 所有API调用统一使用，确保身份一致性
+  - 支持Content-Type和自定义headers
+
+- **操作日志查询接口增强**：
+  - `/api/history/actions`：所有用户可查询所有用户的操作记录
+  - `/api/history/actions/count`：返回按用户和操作类型的统计信息
+  - 支持按时间范围、操作类型筛选
+
+### Changed
+- **权限优化**：
+  - 移除历史报告接口的管理员权限限制
+  - 所有用户可以查看和管理自己的历史报告
+  - 操作日志查询和统计对所有用户开放
+  - 历史报告列表接口 `/api/reports` 统一为用户级权限
+
+- **日志文件命名规则**：
+  - 普通任务日志：`web_process_YYYYMMDD_HHMMSS_文件名.log`
+  - 路径任务日志：`web_path_YYYYMMDD_HHMMSS_文件名.log`
+  - 普通报告：`report_【文件名】_时间戳.html`
+  - 路径报告：`report_path_【文件名】_时间戳.html`
+
+- **前端界面优化**：
+  - 功能卡片区域标题从"管理员功能"改为"数据查询"
+  - 操作日志、操作统计等功能对所有用户可见
+  - 描述文本更新，明确功能范围
+
+### Fixed
+- 修复 `/api/reports` 接口的权限判断逻辑
+- 修复任务处理函数中的埋点调用
+- 修复前端API请求头设置不一致问题
+
+---
+
+## [2.4.0] - 2026-06-03
+
+### Added
+- **规则模式日志分析器**：
+  - 新建 `report/rule_based_analyzer.py` 模块，实现不依赖 LLM 的日志分析功能
+  - 多层次错误分类：Critical、High、Medium、Low 四个严重级别
+  - 根本原因识别：支持 8 种根本原因类型（null_reference、resource_leak、timeout 等）
+  - 智能建议生成：基于错误类型和根本原因自动生成修复建议
+  - 统计分析：支持错误级别分布、错误类型、高频类等统计
+  - 兼容 LLM 格式：输出与 `AnalysisResult` 完全兼容，可无缝集成
+- **ChunkProcessor 改造**：
+  - 新增 `use_llm` 参数，支持在 LLM 模式和规则模式间切换
+  - 默认值为 `True`，保持向后兼容
+  - 规则模式下完全跳过 LLM 调用，降低成本
+  - 支持并行处理和串行处理两种模式
+- **API 接口更新**：
+  - `/api/process` 接口新增 `use_llm` 参数
+  - 用户可选择不依赖 LLM 直接进行分析并生成报告
+  - 保持与现有 API 的完全兼容
+- **测试用例**：
+  - 新建 `tests/test_rule_based_analyzer.py`，包含 7 个测试类
+  - 新建 `tests/test_rule_based_standalone_v2.py`，独立验证脚本
+  - 覆盖错误分类、错误分析、结果转换、性能测试等场景
+- **文档**：
+  - 新建 `docs/RULE_BASED_ANALOGER.md`，详细说明规则模式功能
+
+### Changed
+- **导入优化**：使用延迟导入避免循环依赖问题
+- **类型支持增强**：规则分析器同时支持字典和对象格式的日志条目
+
+### Advantages
+- **无需 LLM**：不依赖外部 LLM 服务，完全离线工作
+- **极速响应**：处理 1000 条日志在 1 秒内完成
+- **零成本**：无需 API 调用费用
+- **轻量级**：内存占用小，适合资源受限环境
+- **可预测**：结果完全由规则决定，无随机性
+
+### Limitations
+- 语义理解能力有限
+- 上下文理解能力弱于 LLM
+- 建议的精准度可能不如 LLM
+
+---
+
+## [2.3.0] - 2026-06-02
+
+### Added
+- **智能错误合并功能**：
+  - 新建 `report/error_merger.py` 模块，实现多层次错误合并策略
+  - 精确匹配去重：完全相同的错误记录只保留一条
+  - 语义相似合并：使用编辑距离算法识别相似错误
+  - 模式匹配合并：自动提取消息模式，去除动态内容（UUID、IP、数字、路径等）
+  - 可配置合并规则：支持调整相似度阈值、最大组数、示例数等参数
+  - 保留关键上下文：合并时保留原始错误引用、影响类列表、示例消息
+- **预设合并配置**：
+  - `DEFAULT_CONFIG`：标准配置（相似度阈值 0.8）
+  - `STRICT_CONFIG`：严格模式（只合并完全相同的错误）
+  - `LENIENT_CONFIG`：宽松模式（更多合并）
+- **报告生成器集成**：`report/generator.py` 集成智能合并功能，优化错误分析章节
+- **单元测试**：新建 `tests/test_intelligent_error_merger.py`，覆盖精确匹配、语义相似、模式匹配、性能测试等场景
+- **文档更新**：更新 README.md、PROJECT_OVERVIEW.md、USER_GUIDE.md、DEVELOPER_GUIDE.md
+
+### Changed
+- **错误分析章节优化**：报告中错误分析部分现在展示合并后的错误组，减少重复内容
+- **性能优化**：处理 1000+ 错误日志时，合并操作在 10 秒内完成
+
+### Fixed
+- 模式提取功能错误：调整正则表达式顺序，先处理复杂模式（UUID、IP）再处理简单数字替换
+- 语义相似度合并测试失败：优化测试用例，使用更相似的错误消息
+
+---
+
 ## [2.2.0] - 2026-06-02
 
 ### Added
 - **PCAP提示词优化**：
-  - 新增网络安全分析专家角色定位
-  - 强化协议识别、异常行为检测、证据链等专业分析维度
+  - 新增网络安全分析专家角色定义
+  - 强化协议识别、异常检测、证据链等专业分析维度
   - 规范JSON输出格式，确保程序可解析
-  - 新增9章报告结构：基础信息概览、连接生命周期分析、流量特征分析、协议识别与分析、异常行为检测、关键问题清单、优化建议、预期收益评估、证据链
+  - 新增9章节报告结构：基础信息概览、连接生命周期分析、流量特征分析、协议识别与分析、异常行为检测、关键问题清单、优化建议、预期收益评估、证据链
 - **报告结构优化**：
   - 日志分析报告结构统一：处理概览、统计分析、错误分析、趋势识别与故障时间线、根因分析、处置与整改建议、总体摘要
   - 合并相关章节，逻辑更清晰、层次更分明
   - 修复PDF格式转换问题，确保与Word/MD格式一致性
+- **路径读取功能**：
+  - 新增 `POST /api/read-path` 端点：直接从服务器路径读取日志文件
+  - 新增 `POST /api/process-from-path` 端点：从路径读取并分析日志
+  - 实现路径安全验证（防遍历、防越权、白名单控制）
+  - 支持目录递归扫描与文件过滤
+  - 支持文件预览功能
+  - 与现有上传功能平行互补，完善日志处理工作流
+- **项目文档完善**：
+  - 新增 `docs/PROJECT_OVERVIEW.md`：项目全面综述文档
+  - 新增 `tests/TEST_SUMMARY.md`：测试结果总结
+  - 更新 README：优化文档索引结构
 
 ### Changed
 - **PCAP处理器**：`processor/pcap_processor.py` 新增专业提示词生成方法
 - **报告生成器**：`report/generator.py` 优化章节合并逻辑
+- **项目结构优化**：
+  - 移除临时/冗余文件（`modify_client.py`、`optimized_prompt.md` 等）
+  - 完善 `.gitignore` 规则
+  - 精简测试套件，保留核心测试
 
 ### Fixed
 - PCAP提示词JSON格式语法错误（`protocol_behavior: {}` → `protocol_behavior: {{}}`）
@@ -221,6 +377,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | 版本 | 主要变化 | 关键指标 |
 |------|----------|----------|
+| 2.3.0 | 智能错误合并 | 支持 1000+ 错误合并 |
+| 2.2.0 | PCAP增强 + 报告优化 | 9章节专业报告结构 |
 | 2.1.0 | 刷新恢复 + 文档体系 | 完整文档 |
 | 2.0.0 | 用户隔离 + 历史报告 | 21 个 API 路由 |
 | 1.8.0 | 断点续传 | 检查点批量保存 |
@@ -254,9 +412,18 @@ for file in Path("uploads").glob("*"):
     shutil.copy2(file, target)
 ```
 
-### 从 2.0 升级到 2.1
+### 从 2.1 升级到 2.2
 
-**兼容升级**，无破坏性变更。前端自动兼容老版本 API。
+**兼容升级**，无破坏性变更。
+
+### 从 2.2 升级到 2.3
+
+**兼容升级**，无破坏性变更。
+
+**新增功能**：
+- 智能错误合并功能自动启用
+- API `/api/process` 新增 `merge_config` 参数用于自定义合并策略
+- 环境变量支持配置合并参数（见 USER_GUIDE.md）
 
 ---
 

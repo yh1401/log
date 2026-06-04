@@ -112,8 +112,8 @@ Examples:
     parser.add_argument(
         '--config',
         type=str,
-        default="/Users/a666/Documents/trae_projects/log/loggen/llm/llmconfig",
-        help='Path to LLM configuration file'
+        default=None,
+        help='Path to JSON configuration file (optional, uses config/config.json by default)'
     )
 
     parser.add_argument(
@@ -256,7 +256,15 @@ async def async_main(args):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Initializing...")
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Log file: {log_file}")
 
-    llm_config = load_llm_config(args.config)
+    # 使用统一配置体系
+    settings = init_settings(args.config)
+    llm_config = settings.llm
+    
+    # 如果命令行参数未指定，则使用配置文件中的默认值
+    chunk_size = args.chunk_size if args.chunk_size else settings.processing.chunk_size
+    max_retries = args.max_retries if args.max_retries else settings.processing.max_retries
+    retry_delay = args.retry_delay if args.retry_delay else settings.processing.retry_delay
+    
     print(f"[{datetime.now().strftime('%H:%M:%S')}] LLM Config: {llm_config.model_name}")
 
     ensure_dir(args.output)
@@ -264,11 +272,11 @@ async def async_main(args):
 
     llm_client = LLMClient(
         config=llm_config,
-        max_retries=args.max_retries,
-        retry_delay=args.retry_delay
+        max_retries=max_retries,
+        retry_delay=retry_delay
     )
 
-    parser = LogParser(chunk_size=args.chunk_size)
+    parser = LogParser(chunk_size=chunk_size)
 
     checkpoint_manager = CheckpointManager(
         checkpoint_dir=args.checkpoint_dir
