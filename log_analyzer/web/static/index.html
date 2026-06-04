@@ -782,6 +782,14 @@
                         <div style="display: flex; gap: 8px;">
                             <button 
                                 class="btn btn-secondary" 
+                                onclick="downloadApiDoc()"
+                                style="padding: 6px 12px; font-size: 0.875rem; display: flex; align-items: center; gap: 4px;"
+                            >
+                                <span>📥</span>
+                                <span>下载文档</span>
+                            </button>
+                            <button 
+                                class="btn btn-secondary" 
                                 onclick="refreshApiDoc()"
                                 style="padding: 6px 12px; font-size: 0.875rem; display: flex; align-items: center; gap: 4px;"
                             >
@@ -1190,6 +1198,30 @@
 
         async function refreshApiDoc() {
             await loadApiDoc();
+        }
+
+        async function downloadApiDoc() {
+            try {
+                const response = await fetch('/api/docs/api');
+                const result = await response.json();
+                
+                if (result.code === 0 && result.data) {
+                    // 创建下载链接
+                    const blob = new Blob([result.data.content], { type: 'text/markdown' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'API.md';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                } else {
+                    alert('下载API文档失败: ' + (result.message || '未知错误'));
+                }
+            } catch (error) {
+                alert('下载API文档失败: ' + error.message);
+            }
         }
 
         async function loadApiDoc() {
