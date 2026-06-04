@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 更新 README.md，将分散的文档内容整合
   - 保留核心文档：USER_GUIDE.md、DEVELOPER_GUIDE.md、RULE_MODE_GUIDE.md、API.md、CHANGELOG.md、QUICK_REFERENCE.md、PROMPTS.md、PROJECT_OVERVIEW.md
 
+- **API 文档优化**：
+  - 优化目录结构，添加接口中文名称和路径
+  - 删除 `/api/read-path` 接口（功能已被 `/api/list-dir` 替代）
+  - 完善 username 参数说明，明确其仅用于界面显示
+  - 更新接口变更说明
+
 ### Fixed
 - **路径读取任务处理逻辑修复**：
   - 修复 `process_files_from_path` 函数中的 Logger 变量名错误：logger → task_logger
