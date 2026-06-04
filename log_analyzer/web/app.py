@@ -1188,6 +1188,44 @@ async def root():
 async def health_check():
     return {"status": "ok", "message": "Log Analyzer API is running"}
 
+
+@app.get("/api/docs/api")
+async def get_api_docs():
+    """
+    获取API文档内容
+    
+    返回API.md文件的内容，用于前端展示
+    """
+    docs_dir = PROJECT_ROOT / "log_analyzer" / "docs"
+    api_doc_path = docs_dir / "API.md"
+    
+    if not api_doc_path.exists():
+        return JSONResponse({
+            "code": 1,
+            "message": "API文档文件不存在",
+            "data": None
+        }, status_code=404)
+    
+    try:
+        content = api_doc_path.read_text(encoding="utf-8")
+        return JSONResponse({
+            "code": 0,
+            "message": "success",
+            "data": {
+                "content": content,
+                "file_name": "API.md",
+                "last_modified": datetime.fromtimestamp(api_doc_path.stat().st_mtime).isoformat()
+            }
+        })
+    except Exception as e:
+        logger.error(f"读取API文档失败: {e}")
+        return JSONResponse({
+            "code": 1,
+            "message": f"读取API文档失败: {str(e)}",
+            "data": None
+        }, status_code=500)
+
+
 SUPPORTED_EXTENSIONS = ('.log', '.txt', '.zip', '.pcap')
 
 
