@@ -512,12 +512,49 @@ X-User_Name: user_001
 | processing | 正在处理 |
 | completed | 处理完成 |
 | failed | 处理失败 |
+| cancelled | 任务已被取消 |
 
 **错误响应**
 ```json
 {
     "code": 200,
     "message": "任务不存在",
+    "data": null
+}
+```
+
+### 5.2 取消任务
+
+**请求**
+```http
+POST /api/task/{task_id}/cancel
+X-User-Id: user_001
+X-User_Name: user_001
+```
+
+**路径参数**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| task_id | string | 任务ID |
+
+**成功响应**
+```json
+{
+    "code": 0,
+    "message": "任务已成功取消",
+    "data": {
+        "task_id": "user_001_20260601_100000_123456",
+        "status": "cancelled"
+    }
+}
+```
+
+**错误响应**
+```json
+{
+    "code": 1,
+    "message": "无权取消此任务",
     "data": null
 }
 ```

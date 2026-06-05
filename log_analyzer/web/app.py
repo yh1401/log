@@ -5,6 +5,7 @@ import sys
 import asyncio
 import logging
 import json
+import threading
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -615,7 +616,9 @@ ensure_dir(str(UPLOAD_DIR))
 ensure_dir(str(REPORTS_DIR))
 ensure_dir(str(LOGS_DIR))
 
+# 全局任务状态字典和线程锁
 processing_tasks: Dict[str, Dict[str, Any]] = {}
+processing_tasks_lock = threading.Lock()  # 保护processing_tasks的线程锁
 
 class ProcessRequest(BaseModel):
     """统一的日志文件处理请求模型"""
@@ -996,6 +999,11 @@ async def process_log_files(
             task_info["message"] = f"正在处理文件 {idx + 1}/{total_files}: {file_name}"
             task_info["progress"] = idx / total_files * 80
 
+            # 检查任务是否被取消
+            if task_info.get("status") == "cancelled":
+                logger.info(f"[Task {task_id}] 任务已被取消，停止处理")
+                break
+
             try:
                 logger.info(f"[Task {task_id}] 开始处理文件: {file_path}")
 
@@ -1160,7 +1168,8 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                         all_reports.append({
                             "name": Path(pcap_html_path).name,
                             "path": pcap_html_path,
-                            "type": "html"
+                            "type": "html",
+                            "content": pcap_html_content
                         })
                     except Exception as e:
                         logger.warning(f"[Task {task_id}] PCAP HTML生成失败: {e}")
@@ -1313,13 +1322,13 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                                 "path": saved_file,
                                 "type": file_type
                             }
-                            # 如果是MD文件，读取文件内容返回
-                            if file_type == "markdown":
+                            # 如果是MD或HTML文件，读取文件内容返回
+                            if file_type in ["markdown", "html"]:
                                 try:
                                     with open(saved_file, 'r', encoding='utf-8') as f:
                                         report_entry["content"] = f.read()
                                 except Exception as e:
-                                    logger.warning(f"[Task {task_id}] 读取MD文件内容失败: {e}")
+                                    logger.warning(f"[Task {task_id}] 读取{file_type}文件内容失败: {e}")
                             all_reports.append(report_entry)
                         processed_files += 1
                     else:
@@ -1349,13 +1358,13 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                         "path": saved_file,
                         "type": file_type
                     }
-                    # 如果是MD文件，读取文件内容返回
-                    if file_type == "markdown":
+                    # 如果是MD或HTML文件，读取文件内容返回
+                    if file_type in ["markdown", "html"]:
                         try:
                             with open(saved_file, 'r', encoding='utf-8') as f:
                                 report_entry["content"] = f.read()
                         except Exception as e:
-                            logger.warning(f"[Task {task_id}] 读取MD文件内容失败: {e}")
+                            logger.warning(f"[Task {task_id}] 读取{file_type}文件内容失败: {e}")
                     all_reports.append(report_entry)
             except Exception as e:
                 logger.error(f"[Task {task_id}] 生成综合报告失败: {str(e)}")
@@ -1872,12 +1881,20 @@ async def process_files_from_path(
                                        "pdf" if saved_file.endswith(".pdf") else \
                                        "word" if saved_file.endswith(".docx") else \
                                        "markdown" if saved_file.endswith(".md") else "json"
-                            all_reports.append({
+                            report_entry = {
                                 "name": Path(saved_file).name,
                                 "path": saved_file,
                                 "type": file_type,
                                 "source_file": file_path
-                            })
+                            }
+                            # 如果是MD或HTML文件，读取文件内容返回
+                            if file_type in ["markdown", "html"]:
+                                try:
+                                    with open(saved_file, 'r', encoding='utf-8') as f:
+                                        report_entry["content"] = f.read()
+                                except Exception as e:
+                                    task_logger.warning(f"[Task {task_id}] 读取{file_type}文件内容失败: {e}")
+                            all_reports.append(report_entry)
                         
                         processed_files += 1
                     else:
@@ -1907,12 +1924,20 @@ async def process_files_from_path(
                                "pdf" if saved_file.endswith(".pdf") else \
                                "word" if saved_file.endswith(".docx") else \
                                "markdown" if saved_file.endswith(".md") else "json"
-                    all_reports.append({
+                    report_entry = {
                         "name": Path(saved_file).name,
                         "path": saved_file,
                         "type": file_type,
                         "is_combined": True
-                    })
+                    }
+                    # 如果是MD或HTML文件，读取文件内容返回
+                    if file_type in ["markdown", "html"]:
+                        try:
+                            with open(saved_file, 'r', encoding='utf-8') as f:
+                                report_entry["content"] = f.read()
+                        except Exception as e:
+                            task_logger.warning(f"[Task {task_id}] 读取{file_type}文件内容失败: {e}")
+                    all_reports.append(report_entry)
             except Exception as e:
                 task_logger.error(f"[Task {task_id}] 生成综合报告失败: {str(e)}")
         
@@ -1972,11 +1997,32 @@ async def upload_file(file: UploadFile = File(...), current_user: Dict = Depends
                 extracted_files = extract_zip(file_path, user_upload_dir)
                 for extracted in extracted_files:
                     if extracted.lower().endswith(('.log', '.txt')):
-                        result_files.append({
-                            'path': extracted,
-                            'name': Path(extracted).name,
-                            'size': format_bytes(os.path.getsize(extracted)) if os.path.exists(extracted) else '0 B'
-                        })
+                        file_size_bytes = os.path.getsize(extracted) if os.path.exists(extracted) else 0
+                        file_name = Path(extracted).name
+                        
+                        # 跨平台隐藏文件和临时文件过滤规则：
+                        # 1. 不以 . 开头（Unix/Linux隐藏文件）
+                        # 2. 不以 _ 开头（临时文件、重复文件）
+                        # 3. 不以 ~$ 开头（Windows Office临时文件）
+                        # 4. 不以 ~ 结尾（Unix备份文件）
+                        # 5. 不是 Thumbs.db（Windows缩略图缓存）
+                        # 6. 不是 .DS_Store（macOS隐藏文件）
+                        is_valid = not (
+                            file_name.startswith('.') or
+                            file_name.startswith('_') or
+                            file_name.startswith('~$') or
+                            file_name.endswith('~') or
+                            file_name == 'Thumbs.db' or
+                            file_name == '.DS_Store'
+                        )
+                        
+                        if is_valid:
+                            result_files.append({
+                                'path': extracted,
+                                'name': file_name,
+                                'size': format_bytes(file_size_bytes),
+                                'size_bytes': file_size_bytes
+                            })
             except Exception as e:
                 logging.error(f"ZIP解压失败: {str(e)}")
 
@@ -1984,7 +2030,8 @@ async def upload_file(file: UploadFile = File(...), current_user: Dict = Depends
             result_files.append({
                 'path': str(file_path),
                 'name': file.filename,
-                'size': format_bytes(len(content))
+                'size': format_bytes(len(content)),
+                'size_bytes': len(content)
             })
 
         # 清理超出限制的旧上传文件
@@ -2361,6 +2408,59 @@ async def get_task_status(task_id: str, current_user: Dict = Depends(get_current
             "message": task_info["message"],
             "reports": task_info.get("reports"),
             "error": task_info.get("error")
+        }
+    })
+
+@app.post("/api/task/{task_id}/cancel")
+async def cancel_task(task_id: str, current_user: Dict = Depends(get_current_user)):
+    """取消正在执行的任务（需要认证，仅能取消属于当前用户的任务）"""
+    if task_id not in processing_tasks:
+        return JSONResponse({
+            "code": 1,
+            "message": "任务不存在",
+            "data": None
+        }, status_code=404)
+
+    task_info = processing_tasks[task_id]
+    if task_info.get("user_id") != current_user["user_id"]:
+        return JSONResponse({
+            "code": 1,
+            "message": "无权取消此任务",
+            "data": None
+        }, status_code=403)
+
+    # 检查任务状态
+    if task_info["status"] == "completed":
+        return JSONResponse({
+            "code": 1,
+            "message": "任务已完成，无需取消",
+            "data": None
+        }, status_code=400)
+
+    if task_info["status"] == "cancelled":
+        return JSONResponse({
+            "code": 1,
+            "message": "任务已被取消",
+            "data": None
+        }, status_code=400)
+
+    # 设置任务为取消状态
+    task_info["status"] = "cancelled"
+    task_info["message"] = "任务已被用户取消"
+    task_info["progress"] = task_info.get("progress", 0)
+
+    # 保存任务状态到文件
+    with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+        json.dump(task_info, f, indent=2)
+
+    logger.info(f"[Task {task_id}] 任务已被用户取消")
+
+    return JSONResponse({
+        "code": 0,
+        "message": "任务已成功取消",
+        "data": {
+            "task_id": task_id,
+            "status": "cancelled"
         }
     })
 

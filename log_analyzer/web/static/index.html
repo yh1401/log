@@ -1071,6 +1071,9 @@
                     <div class="progress-info">
                         <span class="progress-percentage" id="progressPercentage">0%</span>
                         <span class="progress-time" id="progressTime">预计剩余时间计算中...</span>
+                        <button class="btn btn-danger cancel-btn" id="cancelBtn" style="display: none;" onclick="cancelCurrentTask()">
+                            ⚠️ 终止分析
+                        </button>
                     </div>
                     
                     <div class="progress-bar">
@@ -1329,6 +1332,31 @@
                         <div style="color: var(--apple-gray);">正在加载报告...</div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- HTML报告预览模态框 -->
+        <div id="htmlPreviewModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10000; justify-content: center; align-items: center; backdrop-filter: blur(4px);" onclick="closeHtmlModal()">
+            <div style="background: white; border-radius: 12px; padding: 0; max-width: 1200px; width: 95%; max-height: 95vh; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.3); position: relative; z-index: 10001;" onclick="event.stopPropagation()">
+                <!-- 头部 -->
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: var(--apple-light-gray); border-bottom: 1px solid var(--apple-border-color);">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 1.5rem;">🌐</span>
+                        <h2 style="font-size: 1.125rem; font-weight: 600; color: var(--apple-dark-gray);" id="htmlModalTitle">报告预览</h2>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button 
+                            class="btn btn-secondary" 
+                            onclick="closeHtmlModal()"
+                            style="padding: 6px 12px; font-size: 0.875rem;"
+                        >
+                            关闭
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 内容区域 -->
+                <iframe id="htmlPreviewContent" style="width: 100%; height: calc(95vh - 60px); border: none;"></iframe>
             </div>
         </div>
 
@@ -1839,7 +1867,7 @@ let selectedServerFiles = [];
                             <div style="color: var(--apple-gray); text-align: center; padding: 20px;">加载中...</div>
                         </div>
                         <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 10px;">
-                            <button class="btn btn-secondary" id="selectDirBtn" disabled style="opacity: 0.5; cursor: not-allowed;">选择整个目录</button>
+                            <!-- <button class="btn btn-secondary" id="selectDirBtn" disabled style="opacity: 0.5; cursor: not-allowed;">选择整个目录</button> -->
                             <button class="btn btn-primary" id="selectFilesBtn" disabled style="opacity: 0.5; cursor: not-allowed;">分析选中文件</button>
                         </div>
                     </div>
@@ -2384,25 +2412,56 @@ let selectedServerFiles = [];
                     const data = result.data;
                     if (data.extracted_files && data.extracted_files.length > 0) {
                         for (const extractedFile of data.extracted_files) {
-                            let filePath, fileName, fileSize;
+                            let filePath, fileName, fileSize, fileSizeBytes;
                             if (typeof extractedFile === 'string') {
                                 filePath = extractedFile;
                                 fileName = extractedFile.split('/').pop();
                                 fileSize = '提取文件';
+                                fileSizeBytes = 0;
                             } else {
                                 filePath = extractedFile.path;
                                 fileName = extractedFile.name;
                                 fileSize = extractedFile.size || '提取文件';
+                                fileSizeBytes = extractedFile.size_bytes || 0;
                             }
 
                             const ext = filePath.toLowerCase();
-                            if (ext.endsWith('.log') || ext.endsWith('.txt')) {
-                                const exists = selectedFiles.some(f => f.path === filePath);
-                                if (!exists) {
+                            
+                            // 跨平台隐藏文件和临时文件过滤规则：
+                            // 1. 文件扩展名必须是 .log 或 .txt
+                            // 2. 不以 . 开头（Unix/Linux隐藏文件）
+                            // 3. 不以 _ 开头（临时文件、重复文件）
+                            // 4. 不以 ~$ 开头（Windows Office临时文件）
+                            // 5. 不以 ~ 结尾（Unix备份文件）
+                            // 6. 不是 Thumbs.db（Windows缩略图缓存）
+                            // 7. 不是 .DS_Store（macOS隐藏文件）
+                            const isValid = (ext.endsWith('.log') || ext.endsWith('.txt')) && 
+                                !fileName.startsWith('.') && 
+                                !fileName.startsWith('_') && 
+                                !fileName.startsWith('~$') && 
+                                !fileName.endsWith('~') && 
+                                fileName !== 'Thumbs.db' && 
+                                fileName !== '.DS_Store';
+                            
+                            if (isValid) {
+                                
+                                // 检查路径是否已存在
+                                const pathExists = selectedFiles.some(f => f.path === filePath);
+                                // 检查文件名是否已存在（处理同名文件）
+                                const nameExists = selectedFiles.some(f => f.name === fileName);
+                                
+                                if (!pathExists) {
+                                    let displayName = fileName;
+                                    // 如果文件名重复，添加路径信息区分
+                                    if (nameExists) {
+                                        const dirName = filePath.split('/').slice(-2, -1)[0];
+                                        displayName = `${dirName}/${fileName}`;
+                                    }
+                                    
                                     selectedFiles.push({
                                         path: filePath,
-                                        name: fileName,
-                                        size: 0,
+                                        name: displayName,
+                                        size: fileSizeBytes,
                                         size_str: fileSize,
                                         uploaded: true,
                                         extracted: true,
@@ -2598,6 +2657,9 @@ let selectedServerFiles = [];
                         throw new Error(result.message || '创建任务失败');
                     }
                     currentTaskId = result.data.task_id;
+                    
+                    // 显示取消按钮
+                    showCancelButton();
 
                     saveActiveTask({
                         task_id: currentTaskId,
@@ -2653,11 +2715,16 @@ let selectedServerFiles = [];
                 await loadHistory();
                 document.getElementById('startBtn').disabled = false;
                 currentTaskId = null;
+                hideCancelButton();
                 clearActiveTask();
                 hideReconnectBanner();
 
             } catch (error) {
-                showError('分析失败: ' + (error.message || ''));
+                if (error.message === '任务已被取消') {
+                    showError('任务已成功取消，如需继续分析请重新选取文件并分析');
+                } else {
+                    showError('分析失败: ' + (error.message || ''));
+                }
                 document.getElementById('startBtn').disabled = false;
                 progressContainer.classList.remove('active');
             }
@@ -2780,6 +2847,11 @@ let selectedServerFiles = [];
                             clearActiveTask();
                             hideReconnectBanner();
                             finishReject(new Error(task.error || '处理失败'));
+                        } else if (task.status === 'cancelled') {
+                            hideCancelButton();
+                            clearActiveTask();
+                            hideReconnectBanner();
+                            finishReject(new Error('任务已被取消'));
                         } else {
                             pollDelay = baseDelay;
                             taskPollInterval = setTimeout(tick, pollDelay);
@@ -2837,16 +2909,18 @@ let selectedServerFiles = [];
                 <div class="report-list">
                     ${reports.map(report => {
                         const isMarkdown = report.type === 'markdown';
+                        const isHtml = report.type === 'html';
                         return `
                             <div class="report-item">
                                 <div class="report-info">
-                                    <span class="report-icon">${isMarkdown ? '📝' : '📊'}</span>
+                                    <span class="report-icon">${isMarkdown ? '📝' : isHtml ? '🌐' : '📊'}</span>
                                     <div class="report-details">
                                         <div class="report-name">${report.name}</div>
                                     </div>
                                 </div>
                                 <div class="report-actions">
                                     ${isMarkdown && report.content ? `<button class="btn btn-secondary" onclick="viewMarkdownReport('${encodeURIComponent(report.name)}', '${encodeURIComponent(report.content)}')">查看</button>` : ''}
+                                    ${isHtml && report.content ? `<button class="btn btn-secondary" onclick="viewHtmlReport('${encodeURIComponent(report.name)}', '${encodeURIComponent(report.content)}')">查看</button>` : ''}
                                     <button class="btn btn-primary" onclick="downloadReport('${encodeURIComponent(report.path)}')">下载</button>
                                 </div>
                             </div>
@@ -2969,7 +3043,8 @@ let selectedServerFiles = [];
                     ${displayedReports.map(report => {
                         const isDownloadable = DOWNLOADABLE_TYPES.includes(report.type);
                         const isMarkdown = report.type === 'markdown';
-                        const icon = report.type === 'pdf' ? '📄' : report.type === 'word' ? '📝' : report.type === 'markdown' ? '📘' : '📊';
+                        const isHtml = report.type === 'html';
+                        const icon = report.type === 'pdf' ? '📄' : report.type === 'word' ? '📝' : report.type === 'markdown' ? '📘' : report.type === 'html' ? '🌐' : '📊';
                         return `
                             <div class="report-item">
                                 <div class="report-info">
@@ -2981,6 +3056,7 @@ let selectedServerFiles = [];
                                 </div>
                                 <div class="report-actions">
                                     ${isMarkdown ? `<button class="btn btn-secondary" onclick="viewHistoryMarkdown('${encodeURIComponent(report.name)}', '${encodeURIComponent(report.path)}')">查看</button>` : ''}
+                                    ${isHtml ? `<button class="btn btn-secondary" onclick="viewHistoryHtml('${encodeURIComponent(report.name)}', '${encodeURIComponent(report.path)}')">查看</button>` : ''}
                                     ${isDownloadable ? `
                                         <button class="btn btn-primary" onclick="downloadReport('${encodeURIComponent(report.path)}')">下载</button>
                                     ` : ''}
@@ -3013,6 +3089,108 @@ let selectedServerFiles = [];
             } catch (error) {
                 console.error('加载历史报告失败:', error);
                 alert('加载历史报告失败: ' + error.message);
+            }
+        }
+
+        function viewHtmlReport(title, htmlContent) {
+            const modal = document.getElementById('htmlPreviewModal');
+            const titleElement = document.getElementById('htmlModalTitle');
+            const iframe = document.getElementById('htmlPreviewContent');
+            
+            // 设置标题
+            titleElement.textContent = decodeURIComponent(title);
+            
+            // 将HTML内容写入iframe
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            doc.open();
+            doc.write(decodeURIComponent(htmlContent));
+            doc.close();
+            
+            // 显示模态框
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+        }
+
+        async function viewHistoryHtml(title, path) {
+            try {
+                // 从服务器加载HTML文件内容
+                const response = await fetch(`/api/download/${path}`, {
+                    headers: {
+                        'X-User-Id': getCurrentUserId(),
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const content = await response.text();
+                
+                // 使用HTML查看函数显示
+                viewHtmlReport(title, encodeURIComponent(content));
+            } catch (error) {
+                console.error('加载HTML报告失败:', error);
+                alert('加载HTML报告失败: ' + error.message);
+            }
+        }
+
+        function closeHtmlModal() {
+            const modal = document.getElementById('htmlPreviewModal');
+            modal.style.display = 'none';
+            document.body.style.overflow = '';
+        }
+
+        // ==================== 任务取消功能 ====================
+
+        function showCancelButton() {
+            document.getElementById('cancelBtn').style.display = 'inline-block';
+        }
+
+        function hideCancelButton() {
+            document.getElementById('cancelBtn').style.display = 'none';
+        }
+
+        async function cancelCurrentTask() {
+            if (!currentTaskId) {
+                return;
+            }
+
+            if (!confirm('确定要终止当前的分析任务吗？')) {
+                return;
+            }
+
+            try {
+                const response = await apiRequest(`${API_BASE}/api/task/${currentTaskId}/cancel`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const result = await response.json();
+                if (result.code === 0) {
+                    alert('任务已成功终止');
+                    hideCancelButton();
+                    // 清除任务状态
+                    clearActiveTask();
+                    currentTaskId = null;
+                    // 重置UI
+                    document.getElementById('progressFill').style.width = '0%';
+                    document.getElementById('statusText').textContent = '任务已终止';
+                    document.getElementById('progressContainer').classList.remove('active');
+                    document.getElementById('startBtn').disabled = false;
+                    // 重置阶段状态
+                    document.querySelectorAll('.stage').forEach(stage => {
+                        stage.classList.remove('active', 'completed', 'processing', 'analyzing');
+                    });
+                } else {
+                    alert('终止任务失败: ' + result.message);
+                }
+            } catch (error) {
+                console.error('取消任务失败:', error);
+                alert('取消任务失败: ' + error.message);
             }
         }
 
