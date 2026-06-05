@@ -40,11 +40,12 @@ users/
 data/action_logs/
 data/reports_db/
 data/backups/
-auth/
+auth/users.json
 
 # Test artifacts
 tests/logs/
 tests/performance/reports/
+tests/concurrency_test_report.md
 
 # Uploaded files
 uploads/
@@ -54,6 +55,7 @@ reports/
 
 # Checkpoints (runtime generated)
 checkpoints/
+checkpoint/
 
 # Log files (test data)
 logfile/
@@ -78,3 +80,9 @@ config/config.local.json
 config/.env
 llmconfig
 backup/
+
+# Task files (runtime generated)
+tasks/
+
+# Debug directories
+.dbg/
