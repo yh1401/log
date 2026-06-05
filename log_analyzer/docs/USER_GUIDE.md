@@ -249,7 +249,7 @@ python main.py --file /path/to/error.log --format json
 |------|------|------|
 | `--file` | 单个日志文件 | `--file /var/log/app.log` |
 | `--dir` | 日志目录 | `--dir /var/log/app/` |
-| `--config` | LLM 配置路径 | `--config /path/to/llmconfig` |
+| `--config` | LLM 配置路径 | `--config config/config.json` |
 | `--output` | 报告输出目录 | `--output ./reports/` |
 | `--checkpoint-dir` | 检查点目录 | `--checkpoint-dir ./checkpoints/` |
 | `--chunk-size` | 分块行数 | `--chunk-size 500000` |
@@ -552,7 +552,7 @@ curl -H "X-User-Id: alice" -X POST \
 
 **A:** 排查步骤：
 
-1. 检查 `llmconfig` 文件的 API Key 是否有效
+1. 检查 `config/config.json` 文件的 LLM API Key 是否有效
 2. 验证网络：`curl $API_URL -H "Authorization: Bearer $API_KEY"`
 3. 减少 `--chunk-size` 或改用更小的分块数
 4. 增加 `--max-retries 5 --retry-delay 2`

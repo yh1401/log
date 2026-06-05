@@ -967,8 +967,10 @@ class ReportGenerator:
         trends_data = {'趋势识别': unique_trends}
 
         content = "### 趋势识别\n\n"
+        content += "通过对日志数据的深入分析，识别出以下关键趋势和模式：\n\n"
+        content += "**识别到的趋势：**\n\n"
         for idx, trend in enumerate(unique_trends[:10], 1):
-            content += f"{idx}. {trend}\n"
+            content += f"{idx}. **{trend}**\n"
 
         return ReportSection(
             title="趋势识别",
@@ -1071,27 +1073,34 @@ class ReportGenerator:
         total_duration = timeline_data.get('total_duration', '')
 
         content = f"### 故障时间线\n\n"
+        content += "根据日志分析，故障事件的时间线如下：\n\n"
+        
         if description:
-            content += f"{description}\n\n"
+            content += f"**事件概述**: {description}\n\n"
         if total_duration:
-            content += f"**总时长**: {total_duration}\n\n"
+            content += f"**持续时长**: {total_duration}\n\n"
 
         if key_events:
-            content += "#### 关键事件\n\n"
+            content += "#### 📊 关键事件序列\n\n"
+            content += "| 序号 | 时间 | 事件类型 | 描述 |\n"
+            content += "|------|------|----------|------|\n"
+            
             event_type_names = {
-                'first_abnormal': '首次异常',
-                'peak_error': '错误峰值',
-                'recovery': '恢复',
-                'fault_confirmed': '故障确认'
+                'first_abnormal': '🔴 首次异常',
+                'peak_error': '🔥 错误峰值',
+                'recovery': '🟢 恢复',
+                'fault_confirmed': '⚠️ 故障确认'
             }
+            
             for idx, event in enumerate(key_events, 1):
                 event_time = event.get('time', 'N/A')
                 event_type = event.get('event_type', 'unknown')
                 event_desc = event.get('description', '')
 
                 display_type = event_type_names.get(event_type, event_type)
-                content += f"**{idx}. [{event_time}] {display_type}**\n"
-                content += f"- 描述: {event_desc}\n\n"
+                content += f"| {idx} | {event_time} | {display_type} | {event_desc} |\n"
+
+            content += "\n"
 
         return ReportSection(
             title="一、故障时间线（Fault Timeline）",
@@ -2515,6 +2524,16 @@ class ReportGenerator:
                 self._add_suggestions_to_pdf(story, value, body_style)
                 continue
             
+            # 特殊处理趋势识别数据
+            if key == '趋势识别' and isinstance(value, list):
+                self._add_trends_to_pdf(story, value, body_style)
+                continue
+            
+            # 特殊处理时间线数据
+            if key == '时间线' and isinstance(value, dict):
+                self._add_timeline_to_pdf(story, value, body_style)
+                continue
+            
             story.append(Spacer(1, 0.2 * cm))
             story.append(Paragraph(f"<b>{key}:</b>", body_style))
 
@@ -2532,6 +2551,76 @@ class ReportGenerator:
                 story.append(Paragraph(str(value), body_style))
 
             story.append(Spacer(1, 0.2 * cm))
+
+    def _add_trends_to_pdf(self, story, trends: list, body_style) -> None:
+        """将趋势识别数据转换为格式化的PDF内容"""
+        from reportlab.platypus import Spacer, Paragraph
+        from reportlab.lib.units import cm
+
+        story.append(Spacer(1, 0.2 * cm))
+        story.append(Paragraph("<b>趋势识别:</b>", body_style))
+        story.append(Paragraph("通过对日志数据的深入分析，识别出以下关键趋势和模式：", body_style))
+        story.append(Spacer(1, 0.1 * cm))
+        
+        for idx, trend in enumerate(trends[:10], 1):
+            story.append(Paragraph(f"{idx}. <b>{trend}</b>", body_style))
+        
+        story.append(Spacer(1, 0.2 * cm))
+
+    def _add_timeline_to_pdf(self, story, timeline: dict, body_style) -> None:
+        """将时间线数据转换为格式化的PDF表格"""
+        from reportlab.platypus import Spacer, Table, TableStyle, Paragraph
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+
+        story.append(Spacer(1, 0.2 * cm))
+        story.append(Paragraph("<b>故障时间线:</b>", body_style))
+        
+        description = timeline.get('description', '')
+        total_duration = timeline.get('total_duration', '')
+        key_events = timeline.get('key_events', [])
+        
+        if description:
+            story.append(Paragraph(f"<b>事件概述:</b> {description}", body_style))
+        
+        if total_duration:
+            story.append(Paragraph(f"<b>持续时长:</b> {total_duration}", body_style))
+        
+        if key_events:
+            story.append(Spacer(1, 0.1 * cm))
+            story.append(Paragraph("<b>关键事件序列:</b>", body_style))
+            
+            event_type_names = {
+                'first_abnormal': '🔴 首次异常',
+                'peak_error': '🔥 错误峰值',
+                'recovery': '🟢 恢复',
+                'fault_confirmed': '⚠️ 故障确认'
+            }
+            
+            table_data = [['序号', '时间', '事件类型', '描述']]
+            for idx, event in enumerate(key_events, 1):
+                event_time = event.get('time', 'N/A')
+                event_type = event.get('event_type', 'unknown')
+                event_desc = event.get('description', '')
+                display_type = event_type_names.get(event_type, event_type)
+                table_data.append([str(idx), event_time, display_type, event_desc])
+            
+            table = Table(table_data)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ]))
+            
+            story.append(table)
+        
+        story.append(Spacer(1, 0.2 * cm))
 
     def _add_root_cause_to_pdf(self, story, data: Dict[str, Any], body_style) -> None:
         """专门处理根因推断数据，以更易读的格式显示"""

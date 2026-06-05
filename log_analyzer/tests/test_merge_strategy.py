@@ -35,7 +35,7 @@ async def test_merge_strategy():
     print(f"File Size: {file_size_mb:.2f} MB")
     
     try:
-        llm_config = load_llm_config("/Users/a666/Documents/trae_projects/log/log_analyzer/llmconfig")
+        llm_config = load_llm_config()
         
         parser = LogParser(chunk_size=5000)  # Large chunk size to get fewer chunks
         llm_client = LLMClient(llm_config)

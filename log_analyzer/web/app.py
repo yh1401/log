@@ -956,11 +956,9 @@ async def process_log_files(
         log_file, logger = setup_logging(task_id, file_paths, source)
         task_info["log_file"] = log_file
 
-        llm_config_path = "/Users/a666/Documents/trae_projects/log/log_analyzer/llmconfig"
-        try:
-            llm_config = load_llm_config(llm_config_path)
-        except FileNotFoundError as e:
-            error_msg = f"LLM配置文件未找到: {llm_config_path}"
+        llm_config = load_llm_config()
+        if not llm_config.api_key:
+            error_msg = "LLM配置未正确加载，请检查config/config.json文件"
             logger.error(f"[Task {task_id}] {error_msg}")
             task_info["status"] = "failed"
             task_info["message"] = error_msg

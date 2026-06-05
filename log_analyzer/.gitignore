@@ -78,7 +78,7 @@ optimized_prompt.md
 # Configuration files
 config/config.local.json
 config/.env
-llmconfig
+
 backup/
 
 # Task files (runtime generated)

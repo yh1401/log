@@ -18,6 +18,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.5.2] - 2026-06-05
+
+### Added
+- **跨平台部署脚本**：
+  - 新建 `scripts/install.sh`、`scripts/install.bat`、`scripts/start.sh`、`scripts/start.bat`、`scripts/build.sh`
+  - 支持一键安装依赖和启动服务
+  - 支持 Linux/macOS/Windows 跨平台部署
+  - 添加 `scripts/README.md` 说明文档
+
+- **打包工具**：
+  - 新建 `scripts/build.sh` 一键打包脚本
+  - 自动生成版本化压缩包
+  - 自动排除运行时生成的文件
+
+### Changed
+- **LLM 配置统一管理**：
+  - 删除独立的 `llmconfig` 文件
+  - 将 LLM 配置迁移到 `config/config.json`
+  - 更新所有引用的代码文件
+  - 更新文档说明
+
+- **PDF 报告优化**：
+  - 优化趋势识别部分的展示格式
+  - 优化故障时间线的表格展示
+  - 添加事件类型图标标识（首次异常、错误峰值、恢复、故障确认）
+  - 使用中文字段名替代英文字段名
+
+- **项目结构优化**：
+  - 将启动脚本集中到 `scripts/` 目录
+  - 更新 `DEPLOY.md` 部署指南
+  - 更新 `.gitignore` 配置
+
+### Removed
+- 删除独立的 `llmconfig` 配置文件
+
+---
+
 ## [2.5.1] - 2026-06-04
 
 ### Added
