@@ -93,9 +93,28 @@ class UserManager:
 user_manager = UserManager()
 
 
-# ==================== 管理员认证依赖 ====================
+# ==================== 用户认证依赖 ====================
 
 from fastapi import HTTPException, Header
+
+
+async def get_current_user(
+    x_user_id: str = Header(None, alias="X-User-Id"),
+    x_username: str = Header(None, alias="X-Username")
+) -> Dict[str, Any]:
+    """FastAPI依赖：获取当前用户信息
+    
+    - 通过 X-User-Id 和 X-Username 头识别用户身份
+    - 如果未提供则使用默认用户
+    """
+    user_id = x_user_id or DEFAULT_USER_ID
+    username = x_username or DEFAULT_USERNAME
+    
+    user_info = user_manager.get_or_create_user(user_id, username)
+    return user_info
+
+
+# ==================== 管理员认证依赖 ====================
 
 
 async def require_admin(

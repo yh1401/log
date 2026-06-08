@@ -15,6 +15,50 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
+# ========================================
+# 统一日志配置
+# ========================================
+def setup_logging():
+    """配置统一的日志格式"""
+    # 清除已有处理器
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    
+    # 配置日志格式
+    log_format = (
+        "%(asctime)s | %(levelname)-8s | %(name)-30s | %(message)s"
+    )
+    date_format = "%Y-%m-%d %H:%M:%S"
+    
+    # 创建格式化器
+    formatter = logging.Formatter(log_format, date_format)
+    
+    # 创建控制台处理器
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(formatter)
+    
+    # 配置根日志记录器
+    logging.root.setLevel(logging.INFO)
+    logging.root.addHandler(console_handler)
+    
+    # 设置特定模块的日志级别
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+    
+    # 我们的模块使用 DEBUG 级别
+    for module_name in ["web-langchain", "web-langchain.chat_manager", 
+                      "web-langchain.tool_executor", "web-langchain.chat_routes"]:
+        logging.getLogger(module_name).setLevel(logging.DEBUG)
+    
+    logger = logging.getLogger("web-langchain.app")
+    logger.info("=" * 80)
+    logger.info("🚀 日志系统初始化完成")
+    logger.info("=" * 80)
+
+# 立即应用日志配置
+setup_logging()
+
 # 模块导入
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
@@ -35,6 +79,8 @@ from .middleware import ConcurrencyLimitMiddleware
 from .auth import user_manager, get_current_user
 from .storage import get_storage
 from .routes import router as path_router
+from .chat_routes import router as chat_router
+from .user_routes import router as user_router
 from .utils import get_user_dir, get_user_upload_dir, get_user_reports_dir, get_user_checkpoints_dir, setup_logging
 from .path_handler import format_bytes, validate_and_resolve_path, scan_directory_for_logs, read_file_preview
 from .task_processor import process_files_from_path
@@ -68,7 +114,7 @@ ensure_dir(str(USERS_DIR))
 app = FastAPI(
     title="Log Analyzer",
     description="Large-scale log file analysis with LLM",
-    version="2.2.0"  # 版本更新以反映重构
+    version="2.6.0"  # 版本更新：用户维度功能 + 暂存文件修复
 )
 
 # 日志配置
@@ -93,6 +139,12 @@ app.mount("/static", StaticFiles(directory=str(SCRIPT_DIR.parent / "static")), n
 # 包含路径读取相关路由
 app.include_router(path_router)
 
+# 包含对话管理相关路由
+app.include_router(chat_router, prefix="/api")
+
+# 包含用户管理相关路由
+app.include_router(user_router)
+
 # 全局任务状态存储
 processing_tasks: Dict[str, Dict[str, Any]] = {}
 
@@ -106,6 +158,12 @@ SUPPORTED_EXTENSIONS = ('.log', '.txt', '.zip', '.pcap')
 async def root():
     """根页面 - 返回前端界面"""
     return FileResponse(str(SCRIPT_DIR.parent / "static" / "index.html"))
+
+
+@app.get("/chat")
+async def chat_page():
+    """聊天页面 - 返回多轮对话界面"""
+    return FileResponse(str(SCRIPT_DIR.parent / "static" / "chat.html"))
 
 
 @app.get("/api/health")

@@ -1,0 +1,70 @@
+{
+  "messages": [
+    {
+      "message_id": "msg_20260608001807997136_b023",
+      "conversation_id": "conv_20260608001758_074a3eda",
+      "role": "user",
+      "content": "查询最近1小时的错误日志",
+      "timestamp": "2026-06-08T00:18:07.997388",
+      "metadata": {}
+    },
+    {
+      "message_id": "msg_20260608001809334639_4aea",
+      "conversation_id": "conv_20260608001758_074a3eda",
+      "role": "assistant",
+      "content": "找到 2 条相关日志： 1. [2024-01-15 10:30:15] ERROR - Connection timeout - 查询最近1小时的错误日志 2. [2024-01-15 10:31:20] ERROR - NullPointerException - 查询最近1小时的错误日志",
+      "timestamp": "2026-06-08T00:18:09.334840",
+      "metadata": {
+        "intent": "LOG_QUERY",
+        "tools_used": [
+          "search_logs"
+        ],
+        "tokens_used": 20
+      }
+    },
+    {
+      "message_id": "msg_20260608002942946304_1842",
+      "conversation_id": "conv_20260608001758_074a3eda",
+      "role": "user",
+      "content": "统计今天的日志数量",
+      "timestamp": "2026-06-08T00:29:42.947351",
+      "metadata": {}
+    },
+    {
+      "message_id": "msg_20260608002943210921_c189",
+      "conversation_id": "conv_20260608001758_074a3eda",
+      "role": "assistant",
+      "content": "工具调用失败: 缺少必需参数: metric",
+      "timestamp": "2026-06-08T00:29:43.211018",
+      "metadata": {
+        "intent": "STATISTICS",
+        "tools_used": [
+          "get_statistics"
+        ],
+        "tokens_used": 3
+      }
+    },
+    {
+      "message_id": "msg_20260608002946256103_4d12",
+      "conversation_id": "conv_20260608001758_074a3eda",
+      "role": "user",
+      "content": "分析所有错误日志的根本原因",
+      "timestamp": "2026-06-08T00:29:46.256239",
+      "metadata": {}
+    },
+    {
+      "message_id": "msg_20260608002946528168_0e4c",
+      "conversation_id": "conv_20260608001758_074a3eda",
+      "role": "assistant",
+      "content": "工具调用失败: 缺少必需参数: error_pattern",
+      "timestamp": "2026-06-08T00:29:46.528342",
+      "metadata": {
+        "intent": "ERROR_ANALYSIS",
+        "tools_used": [
+          "analyze_errors"
+        ],
+        "tokens_used": 3
+      }
+    }
+  ]
+}

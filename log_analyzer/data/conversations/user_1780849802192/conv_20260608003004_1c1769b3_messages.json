@@ -1,0 +1,26 @@
+{
+  "messages": [
+    {
+      "message_id": "msg_20260608003031870212_15f2",
+      "conversation_id": "conv_20260608003004_1c1769b3",
+      "role": "user",
+      "content": "查询最近1小时的错误日志",
+      "timestamp": "2026-06-08T00:30:31.870478",
+      "metadata": {}
+    },
+    {
+      "message_id": "msg_20260608003033290313_f709",
+      "conversation_id": "conv_20260608003004_1c1769b3",
+      "role": "assistant",
+      "content": "找到 2 条相关日志： 1. [2024-01-15 10:30:15] ERROR - Connection timeout - 查询最近1小时的错误日志 2. [2024-01-15 10:31:20] ERROR - NullPointerException - 查询最近1小时的错误日志",
+      "timestamp": "2026-06-08T00:30:33.290519",
+      "metadata": {
+        "intent": "LOG_QUERY",
+        "tools_used": [
+          "search_logs"
+        ],
+        "tokens_used": 20
+      }
+    }
+  ]
+}

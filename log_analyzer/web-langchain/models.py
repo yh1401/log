@@ -60,3 +60,73 @@ class IdentifyRequest(BaseModel):
     """用户身份识别请求模型"""
     user_id: Optional[str] = None
     username: Optional[str] = None
+
+
+# ==================== 对话管理模型 ====================
+
+class ConversationCreate(BaseModel):
+    """创建对话请求模型"""
+    title: Optional[str] = "新对话"
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ConversationUpdate(BaseModel):
+    """更新对话请求模型"""
+    title: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class MessageCreate(BaseModel):
+    """创建消息请求模型"""
+    content: str
+    metadata: Optional[Dict[str, Any]] = None
+    stream: bool = False
+
+
+class Conversation(BaseModel):
+    """对话模型"""
+    conversation_id: str
+    user_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    message_count: int = 0
+    status: str = "active"
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class Message(BaseModel):
+    """消息模型"""
+    message_id: str
+    conversation_id: str
+    role: str  # user, assistant, system
+    content: str
+    timestamp: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
+# ==================== 工具调用模型 ====================
+
+class ToolCall(BaseModel):
+    """工具调用请求模型"""
+    tool_name: str
+    arguments: Dict[str, Any]
+
+
+class ToolResult(BaseModel):
+    """工具调用结果模型"""
+    tool_name: str
+    success: bool
+    result: Any
+    error: Optional[str] = None
+    execution_time: float = 0.0
+
+
+# ==================== 意图识别模型 ====================
+
+class IntentClassification(BaseModel):
+    """意图识别结果模型"""
+    intent: str
+    confidence: float
+    entities: Optional[List[Dict[str, Any]]] = None
+    suggested_tools: Optional[List[str]] = None

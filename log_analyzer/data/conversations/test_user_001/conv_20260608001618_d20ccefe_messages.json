@@ -1,0 +1,24 @@
+{
+  "messages": [
+    {
+      "message_id": "msg_20260608001756322407_7ca7",
+      "conversation_id": "conv_20260608001618_d20ccefe",
+      "role": "user",
+      "content": "查询最近1小时的错误日志",
+      "timestamp": "2026-06-08T00:17:56.322892",
+      "metadata": {}
+    },
+    {
+      "message_id": "msg_20260608001756338271_2771",
+      "conversation_id": "conv_20260608001618_d20ccefe",
+      "role": "assistant",
+      "content": "找到相关日志记录。正在为您分析...",
+      "timestamp": "2026-06-08T00:17:56.338409",
+      "metadata": {
+        "intent": "LOG_QUERY",
+        "tools_used": [],
+        "tokens_used": 1
+      }
+    }
+  ]
+}
