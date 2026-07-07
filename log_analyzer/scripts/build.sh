@@ -53,7 +53,6 @@ rsync -av --exclude='venv' \
     --exclude='uploads/*' \
     --exclude='data/*' \
     --exclude='checkpoints/*' \
-    --exclude='checkpoint/*' \
     --exclude='logfile/*' \
     --exclude='.dbg/*' \
     --exclude='reports/*' \
@@ -67,6 +66,15 @@ rsync -av --exclude='venv' \
     --exclude='.vscode' \
     --exclude='*.swp' \
     --exclude='*.swo' \
+    --exclude='docs/node_modules' \
+    --exclude='node_modules' \
+    --exclude='.pytest_cache' \
+    --exclude='test_*' \
+    --exclude='*.test.*' \
+    --exclude='start_test.py' \
+    --exclude='performance_test.py' \
+    --exclude='concurrency_test.py' \
+    --exclude='test_memory_adjust.py' \
     "$PROJECT_ROOT/" "$DIST_DIR/$PACKAGE_NAME/" 2>/dev/null
 
 # 创建必要的空目录

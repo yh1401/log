@@ -119,14 +119,14 @@ Examples:
     parser.add_argument(
         '--output', '-o',
         type=str,
-        default="/Users/a666/Documents/trae_projects/log/log_analyzer/reports",
+        default=str(SCRIPT_DIR / "reports"),
         help='Output directory for reports'
     )
 
     parser.add_argument(
         '--checkpoint-dir',
         type=str,
-        default="/Users/a666/Documents/trae_projects/log/log_analyzer/checkpoints",
+        default=str(SCRIPT_DIR / "checkpoints"),
         help='Directory for checkpoint files'
     )
 
@@ -193,7 +193,7 @@ Examples:
     parser.add_argument(
         '--log-dir',
         type=str,
-        default="/Users/a666/Documents/trae_projects/log/log_analyzer/logs",
+        default=str(SCRIPT_DIR / "logs"),
         help='Directory for log files'
     )
 
@@ -208,9 +208,15 @@ def get_log_files(path: str) -> List[str]:
         files = []
         for file_name in os.listdir(path):
             file_path = os.path.join(path, file_name)
-            if os.path.isfile(file_path) and (file_name.endswith('.log') or file_name.endswith('.txt')):
-                if 'error' in file_name.lower():
-                    files.append(file_path)
+            # 支持所有日志文件和trace文件
+            if os.path.isfile(file_path) and (
+                file_name.endswith('.log') or 
+                file_name.endswith('.txt') or
+                'trace' in file_name.lower() or
+                'stream' in file_name.lower() or
+                'statistics' in file_name.lower()
+            ):
+                files.append(file_path)
         return sorted(files)
 
     return []
@@ -292,19 +298,28 @@ async def async_main(args):
         merge_threshold=args.merge_threshold
     )
 
-    log_files = get_log_files(args.file if args.file else args.dir)
+    # 如果未指定 file 或 dir，使用默认目录
+    target_path = args.file or args.dir or str(SCRIPT_DIR / "logs")
+    if target_path is None:
+        print("[ERROR] 请指定 --file 或 --dir 参数")
+        return 1
+
+    log_files = get_log_files(target_path)
 
     if not log_files:
-        print(f"[ERROR] No log files found")
+        print(f"[ERROR] No log files found in {target_path}")
         return 1
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Found {len(log_files)} log file(s)")
 
-    for idx, log_file in enumerate(log_files, 1):
-        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Processing {idx}/{len(log_files)}: {log_file}")
+    # 根据文件数量选择处理策略
+    if len(log_files) == 1:
+        # 单文件：串行处理
+        log_file = log_files[0]
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Processing: {log_file}")
         print(f"[{datetime.now().strftime('%H:%M:%S')}] File size: {get_file_size_str(log_file)}")
 
-        result = processor.process_file(
+        result = await processor.process_file_async(
             file_path=log_file,
             resume=args.resume,
             force_restart=args.force_restart
@@ -322,6 +337,35 @@ async def async_main(args):
                 print(f"  - {saved_file}")
         else:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Processing failed: {result.error_message}")
+    else:
+        # 多文件：并行处理
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 启用并行处理模式")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 文件列表:")
+        for idx, log_file in enumerate(log_files, 1):
+            print(f"  {idx}. {os.path.basename(log_file)} ({get_file_size_str(log_file)})")
+        
+        # 使用并行处理（最多2个并发，避免内存溢出）
+        results = await processor.process_files_batch_async(
+            file_paths=log_files,
+            resume=args.resume,
+            max_concurrent=2
+        )
+
+        # 生成报告
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 开始生成报告...")
+        report_generator = ReportGenerator(output_dir=args.output)
+        
+        for idx, result in enumerate(results, 1):
+            if result.status == "completed":
+                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 报告 {idx}/{len(results)}:")
+                print(f"  文件: {os.path.basename(result.file_path)}")
+                report = report_generator.generate_report(result)
+                saved_files = report_generator.save_report(report, format=args.format)
+                print(f"  保存:")
+                for saved_file in saved_files:
+                    print(f"    - {saved_file}")
+            else:
+                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 报告 {idx} 失败: {result.error_message}")
 
     await llm_client.close()
 

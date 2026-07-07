@@ -42,9 +42,9 @@ ProcessingResult = processor_module.ProcessingResult
 ReportGenerator = report_module.ReportGenerator
 ensure_dir = utils_module.ensure_dir
 
-# 用户相关目录
-USERS_DIR = PROJECT_ROOT / "log_analyzer" / "users"
-TASKS_DIR = PROJECT_ROOT / "log_analyzer" / "tasks"
+# 用户相关目录（位于 PROJECT_ROOT 的父目录下）
+USERS_DIR = PROJECT_ROOT.parent / "users"
+TASKS_DIR = PROJECT_ROOT.parent / "tasks"
 ensure_dir(str(USERS_DIR))
 ensure_dir(str(TASKS_DIR))
 
@@ -563,6 +563,10 @@ console_handler.setLevel(logging.WARNING)
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+# 初始化日志管理器（限制：总大小不超过2GB 且 保留最近10天）
+from log_analyzer.utils.log_manager import setup_log_management
+log_manager = setup_log_management(str(LOG_DIR))
+
 logger.info(f"日志系统初始化完成，日志文件: {log_file}")
 
 app.add_middleware(
@@ -608,9 +612,9 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent=200)
 
-UPLOAD_DIR = PROJECT_ROOT / "log_analyzer" / "uploads"
-REPORTS_DIR = PROJECT_ROOT / "log_analyzer" / "reports"
-LOGS_DIR = PROJECT_ROOT / "log_analyzer" / "logs"
+UPLOAD_DIR = PROJECT_ROOT.parent / "uploads"
+REPORTS_DIR = PROJECT_ROOT.parent / "reports"
+LOGS_DIR = PROJECT_ROOT / "logs"
 
 ensure_dir(str(UPLOAD_DIR))
 ensure_dir(str(REPORTS_DIR))
@@ -620,12 +624,204 @@ ensure_dir(str(LOGS_DIR))
 processing_tasks: Dict[str, Dict[str, Any]] = {}
 processing_tasks_lock = threading.Lock()  # 保护processing_tasks的线程锁
 
+
+class TaskTimeoutMonitor:
+    """任务超时监控器：监控任务执行时间，自动终止超时任务"""
+    
+    def __init__(self, timeout_minutes: int = 20, check_interval: int = 30):
+        """
+        初始化超时监控器
+        
+        Args:
+            timeout_minutes: 任务超时时间（分钟），默认20分钟
+            check_interval: 超时检查间隔（秒），默认30秒
+        """
+        self.timeout_minutes = timeout_minutes
+        self.check_interval = check_interval
+        self._monitoring = False
+        self._monitor_thread = None
+        self._logger = logging.getLogger(__name__)
+        
+        # 加载配置中的超时设置
+        try:
+            from log_analyzer.config.settings import get_settings
+            settings = get_settings()
+            self.timeout_minutes = settings.processing.task_timeout_minutes
+            self.check_interval = settings.processing.task_timeout_check_interval
+            self._logger.info(f"[TimeoutMonitor] 加载配置: 超时={self.timeout_minutes}分钟, 检查间隔={self.check_interval}秒")
+        except Exception as e:
+            self._logger.warning(f"[TimeoutMonitor] 无法加载配置，使用默认值: {e}")
+    
+    def start(self):
+        """启动超时监控线程"""
+        if self._monitoring:
+            self._logger.warning("[TimeoutMonitor] 监控器已在运行")
+            return
+        
+        self._monitoring = True
+        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitor_thread.start()
+        self._logger.info(f"[TimeoutMonitor] 监控器已启动 (超时={self.timeout_minutes}分钟)")
+    
+    def stop(self):
+        """停止超时监控线程"""
+        self._monitoring = False
+        if self._monitor_thread:
+            self._monitor_thread.join(timeout=5)
+        self._logger.info("[TimeoutMonitor] 监控器已停止")
+    
+    def _monitor_loop(self):
+        """监控循环"""
+        while self._monitoring:
+            try:
+                self._check_timeout_tasks()
+                threading.Event().wait(self.check_interval)
+            except Exception as e:
+                self._logger.error(f"[TimeoutMonitor] 监控循环异常: {e}")
+    
+    def _check_timeout_tasks(self):
+        """检查所有任务，终止超时的任务"""
+        with processing_tasks_lock:
+            current_time = datetime.now()
+            timeout_count = 0
+            
+            for task_id, task_info in processing_tasks.items():
+                # 只检查正在处理的任务
+                if task_info.get("status") != "processing":
+                    continue
+                
+                # 检查是否有开始时间
+                start_time = task_info.get("start_time")
+                if not start_time:
+                    continue
+                
+                # 计算运行时长
+                if isinstance(start_time, str):
+                    try:
+                        start_time = datetime.fromisoformat(start_time)
+                    except:
+                        continue
+                
+                elapsed = (current_time - start_time).total_seconds()
+                elapsed_minutes = elapsed / 60
+                
+                # 如果超时，终止任务
+                if elapsed_minutes >= self.timeout_minutes:
+                    timeout_count += 1
+                    self._terminate_timeout_task(task_id, task_info, elapsed_minutes)
+            
+            if timeout_count > 0:
+                self._logger.info(f"[TimeoutMonitor] 本次检查发现 {timeout_count} 个超时任务")
+    
+    def _terminate_timeout_task(self, task_id: str, task_info: Dict, elapsed_minutes: float):
+        """
+        终止超时任务
+        
+        Args:
+            task_id: 任务ID
+            task_info: 任务信息字典
+            elapsed_minutes: 已运行时长（分钟）
+        """
+        self._logger.warning(
+            f"[TimeoutMonitor] 任务 {task_id} 超时！"
+            f"运行时长: {elapsed_minutes:.1f}分钟, "
+            f"超时阈值: {self.timeout_minutes}分钟, "
+            f"文件: {task_info.get('file_paths', ['未知'])}"
+        )
+        
+        try:
+            # 记录终止事件
+            termination_event = {
+                "task_id": task_id,
+                "start_time": task_info.get("start_time"),
+                "termination_time": datetime.now().isoformat(),
+                "elapsed_minutes": elapsed_minutes,
+                "timeout_threshold": self.timeout_minutes,
+                "user_id": task_info.get("user_id"),
+                "file_paths": task_info.get("file_paths", []),
+                "progress": task_info.get("progress", 0),
+                "process_id": os.getpid(),
+                "thread_id": threading.get_ident()
+            }
+            
+            # 记录到终止事件日志
+            self._log_termination_event(termination_event)
+            
+            # 更新任务状态
+            task_info["status"] = "timeout"
+            task_info["message"] = f"任务执行超时（已运行 {elapsed_minutes:.0f} 分钟）"
+            task_info["error"] = f"任务执行超时，系统自动终止"
+            task_info["termination_event"] = termination_event
+            
+            # 保存到文件
+            with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                json.dump(task_info, f, indent=2)
+            
+            # 取消后台任务（如果存在）
+            if task_id in processing_tasks and "background_task" in task_info:
+                background_task = task_info.get("background_task")
+                if background_task and not background_task.done():
+                    background_task.cancel()
+                    self._logger.info(f"[TimeoutMonitor] 已取消任务 {task_id} 的后台任务")
+            
+            self._logger.info(
+                f"[TimeoutMonitor] 任务 {task_id} 已终止，"
+                f"终止事件已记录到日志"
+            )
+            
+        except Exception as e:
+            self._logger.error(f"[TimeoutMonitor] 终止任务 {task_id} 时发生错误: {e}")
+    
+    def _log_termination_event(self, event: Dict):
+        """
+        记录终止事件到专用日志文件
+        
+        Args:
+            event: 终止事件信息
+        """
+        try:
+            termination_log_dir = LOGS_DIR / "terminations"
+            ensure_dir(str(termination_log_dir))
+            
+            log_file = termination_log_dir / f"timeout_terminations_{datetime.now().strftime('%Y%m%d')}.log"
+            
+            log_entry = (
+                f"{'='*80}\n"
+                f"任务超时终止事件\n"
+                f"{'='*80}\n"
+                f"任务ID: {event['task_id']}\n"
+                f"用户ID: {event['user_id']}\n"
+                f"文件路径: {', '.join(event['file_paths'])}\n"
+                f"开始时间: {event['start_time']}\n"
+                f"终止时间: {event['termination_time']}\n"
+                f"运行时长: {event['elapsed_minutes']:.2f} 分钟\n"
+                f"超时阈值: {event['timeout_threshold']} 分钟\n"
+                f"终止时进度: {event['progress']:.1f}%\n"
+                f"进程ID: {event['process_id']}\n"
+                f"线程ID: {event['thread_id']}\n"
+                f"{'='*80}\n"
+            )
+            
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(log_entry)
+            
+            self._logger.info(f"[TimeoutMonitor] 终止事件已记录: {log_file}")
+            
+        except Exception as e:
+            self._logger.error(f"[TimeoutMonitor] 记录终止事件失败: {e}")
+
+
+# 创建并启动全局超时监控器
+task_timeout_monitor = TaskTimeoutMonitor()
+task_timeout_monitor.start()
+
+
 class ProcessRequest(BaseModel):
     """统一的日志文件处理请求模型"""
     file_path: Optional[str] = None
     directory_path: Optional[str] = None
     source: str = "upload"  # "upload" 表示上传文件，"server" 表示服务器路径文件
-    chunk_size: int = 50000
+    chunk_size: Optional[int] = None  # 前端可选传参，不传则使用默认值
     force_restart: bool = False
     # 服务器路径特有参数
     recursive: bool = False
@@ -900,43 +1096,51 @@ def setup_logging(task_id: str, file_paths: List[str] = None, source: str = "upl
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # 创建任务专用logger
-    task_logger = logging.getLogger(f'web_{task_id}')
+    # 创建任务专用logger（使用唯一的logger名称）
+    task_logger = logging.getLogger(f'web_task_{task_id}')
     task_logger.setLevel(logging.INFO)
-    task_logger.propagate = True  # 允许传播到根logger
+    task_logger.propagate = False  # 不传播到根logger，避免影响其他任务
 
+    # 清除已有的处理器
     for handler in task_logger.handlers[:]:
         task_logger.removeHandler(handler)
 
-    # 获取根logger并添加文件handler
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-
-    # 移除现有的文件handler（如果有）
-    for handler in root_logger.handlers[:]:
-        if isinstance(handler, logging.FileHandler):
-            root_logger.removeHandler(handler)
-
-    # 添加新的文件handler
+    # 添加文件处理器（每个任务独立的日志文件）
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
-    root_logger.addHandler(file_handler)
+    task_logger.addHandler(file_handler)
 
-    # 确保控制台输出（如果需要）
-    has_console_handler = any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers)
-    if not has_console_handler:
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.WARNING)
-        console_handler.setFormatter(formatter)
-        root_logger.addHandler(console_handler)
+    # 添加控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    task_logger.addHandler(console_handler)
+
+    # 为模块级logger添加处理器，将日志重定向到task_logger
+    # 这样LLMClient、ChunkProcessor等模块的日志也会被记录
+    module_logger_names = [
+        'log_analyzer.llm.client',
+        'log_analyzer.processor.chunk_processor',
+        'log_analyzer.parser.log_parser',
+    ]
+    
+    for module_name in module_logger_names:
+        module_logger = logging.getLogger(module_name)
+        # 添加指向task_logger文件的handler
+        if not any(isinstance(h, logging.FileHandler) and h.baseFilename == log_file for h in module_logger.handlers):
+            module_handler = logging.FileHandler(log_file, encoding='utf-8')
+            module_handler.setLevel(logging.INFO)
+            module_handler.setFormatter(formatter)
+            module_logger.addHandler(module_handler)
+            module_logger.setLevel(logging.INFO)
 
     return str(log_file), task_logger
 
 async def process_log_files(
     task_id: str,
     file_paths: List[str],
-    chunk_size: int = 50000,
+    chunk_size: int = 1000000,  # 默认分块大小：100万行（优化内存使用）
     force_restart: bool = False,
     source: str = "upload"
 ):
@@ -944,22 +1148,40 @@ async def process_log_files(
     task_info["status"] = "processing"
     task_info["progress"] = 0.0
     task_info["message"] = "开始处理日志文件..."
-
+    task_info["start_time"] = datetime.now().isoformat()  # 记录任务开始时间，用于超时检测
+    
     user_id = task_info.get("user_id", "default")
     user_reports_dir = Path(task_info.get("reports_dir", REPORTS_DIR))
-    user_checkpoints_dir = Path(task_info.get("checkpoints_dir", str(PROJECT_ROOT / "log_analyzer" / "checkpoints")))
+    user_checkpoints_dir = Path(task_info.get("checkpoints_dir", str(PROJECT_ROOT.parent / "checkpoints")))
 
     ensure_dir(str(user_reports_dir))
     ensure_dir(str(user_checkpoints_dir))
+    
+    # 检查任务是否被取消的函数
+    def is_cancelled() -> bool:
+        """检查任务是否被取消"""
+        current_info = processing_tasks.get(task_id)
+        if current_info and current_info.get("status") == "cancelled":
+            return True
+        # 也检查文件
+        task_file = TASKS_DIR / f"{task_id}.json"
+        if task_file.exists():
+            try:
+                with open(task_file, 'r') as f:
+                    file_info = json.load(f)
+                    return file_info.get("status") == "cancelled"
+            except:
+                pass
+        return False
 
     try:
-        log_file, logger = setup_logging(task_id, file_paths, source)
+        log_file, task_logger = setup_logging(task_id, file_paths, source)
         task_info["log_file"] = log_file
 
         llm_config = load_llm_config()
         if not llm_config.api_key:
             error_msg = "LLM配置未正确加载，请检查config/config.json文件"
-            logger.error(f"[Task {task_id}] {error_msg}")
+            task_logger.error(f"[Task {task_id}] {error_msg}")
             task_info["status"] = "failed"
             task_info["message"] = error_msg
             task_info["error"] = error_msg
@@ -999,14 +1221,14 @@ async def process_log_files(
 
             # 检查任务是否被取消
             if task_info.get("status") == "cancelled":
-                logger.info(f"[Task {task_id}] 任务已被取消，停止处理")
+                task_logger.info(f"[Task {task_id}] 任务已被取消，停止处理")
                 break
 
             try:
-                logger.info(f"[Task {task_id}] 开始处理文件: {file_path}")
+                task_logger.info(f"[Task {task_id}] 开始处理文件: {file_path}")
 
                 if file_path.lower().endswith('.pcap'):
-                    logger.info(f"[Task {task_id}] PCAP文件检测到，使用专用处理器...")
+                    task_logger.info(f"[Task {task_id}] PCAP文件检测到，使用专用处理器...")
                     
                     # 更新状态：开始解析PCAP文件
                     task_info["message"] = f"正在解析PCAP文件 {idx + 1}/{total_files}: {file_name}"
@@ -1020,10 +1242,10 @@ async def process_log_files(
                     pcap_processor = PCAPProcessor(max_packets=1000)
                     stats, packets = pcap_processor.process_file(file_path)
                     
-                    logger.info(f"[Task {task_id}] PCAP处理完成:")
-                    logger.info(f"  - 总数据包: {stats.total_packets}")
-                    logger.info(f"  - TCP: {stats.tcp_packets}, UDP: {stats.udp_packets}")
-                    logger.info(f"  - 错误: {stats.error_count}, 警告: {stats.warning_count}")
+                    task_logger.info(f"[Task {task_id}] PCAP处理完成:")
+                    task_logger.info(f"  - 总数据包: {stats.total_packets}")
+                    task_logger.info(f"  - TCP: {stats.tcp_packets}, UDP: {stats.udp_packets}")
+                    task_logger.info(f"  - 错误: {stats.error_count}, 警告: {stats.warning_count}")
                     
                     # 更新状态：开始AI分析PCAP数据
                     task_info["message"] = f"AI正在分析PCAP数据 {idx + 1}/{total_files}: {file_name}"
@@ -1032,7 +1254,7 @@ async def process_log_files(
                     with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
                         json.dump(task_info, f, indent=2)
                     
-                    logger.info(f"[Task {task_id}] 准备调用LLM分析PCAP数据...")
+                    task_logger.info(f"[Task {task_id}] 准备调用LLM分析PCAP数据...")
                     analysis_prompt = pcap_processor.generate_analysis_prompt()
                     
                     messages = [
@@ -1040,15 +1262,15 @@ async def process_log_files(
                         {"role": "user", "content": analysis_prompt}
                     ]
                     
-                    logger.info(f"[Task {task_id}] LLM请求发送中...")
+                    task_logger.info(f"[Task {task_id}] LLM请求发送中...")
                     llm_response = await llm_client.chat(messages=messages, temperature=0.3, max_tokens=2048)
                     
                     if llm_response.is_success() and llm_response.content:
                         llm_result = llm_response.content
-                        logger.info(f"[Task {task_id}] LLM分析完成，结果长度: {len(llm_result)} chars")
+                        task_logger.info(f"[Task {task_id}] LLM分析完成，结果长度: {len(llm_result)} chars")
                     else:
                         llm_result = f"LLM分析失败: {llm_response.error}"
-                        logger.error(f"[Task {task_id}] LLM分析失败: {llm_response.error}")
+                        task_logger.error(f"[Task {task_id}] LLM分析失败: {llm_response.error}")
                     
                     # 更新状态：生成PCAP报告
                     task_info["message"] = f"正在生成PCAP报告 {idx + 1}/{total_files}: {file_name}"
@@ -1141,7 +1363,7 @@ async def process_log_files(
                             "type": "markdown" if saved_file.endswith(".md") else "json"
                         })
                     
-                    logger.info(f"[Task {task_id}] PCAP报告已保存: {saved_files}")
+                    task_logger.info(f"[Task {task_id}] PCAP报告已保存: {saved_files}")
                     processed_files += 1
 
                     pcap_html_path = f"{pcap_report_path}.html"
@@ -1170,7 +1392,7 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                             "content": pcap_html_content
                         })
                     except Exception as e:
-                        logger.warning(f"[Task {task_id}] PCAP HTML生成失败: {e}")
+                        task_logger.warning(f"[Task {task_id}] PCAP HTML生成失败: {e}")
                     
                     try:
                         from reportlab.lib.pagesizes import A4
@@ -1197,7 +1419,7 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                             "type": "pdf"
                         })
                     except Exception as e:
-                        logger.warning(f"[Task {task_id}] PCAP PDF生成失败: {e}")
+                        task_logger.warning(f"[Task {task_id}] PCAP PDF生成失败: {e}")
                     
                     try:
                         from docx import Document
@@ -1217,10 +1439,10 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                             "type": "word"
                         })
                     except Exception as e:
-                        logger.warning(f"[Task {task_id}] PCAP Word生成失败: {e}")
+                        task_logger.warning(f"[Task {task_id}] PCAP Word生成失败: {e}")
                     
                 elif file_path.lower().endswith('.zip'):
-                    logger.info(f"[Task {task_id}] ZIP文件，跳过直接分析（已在上传时解压）: {file_path}")
+                    task_logger.info(f"[Task {task_id}] ZIP文件，跳过直接分析（已在上传时解压）: {file_path}")
                     continue
                     
                 else:
@@ -1231,7 +1453,7 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                     with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
                         json.dump(task_info, f, indent=2)
                     
-                    logger.info(f"[Task {task_id}] 开始解析文件: {file_path}")
+                    task_logger.info(f"[Task {task_id}] 开始解析文件: {file_path}")
                     
                     # AI分析进度递增任务相关变量
                     ai_progress_task = None
@@ -1258,6 +1480,23 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                                     # 已经达到86%，保持不变
                                     break
                     
+                    # 定义内容回调函数
+                    async def content_callback(content):
+                        nonlocal task_info
+                        if "stream_content" not in task_info:
+                            task_info["stream_content"] = []
+                        task_info["stream_content"].append({
+                            "timestamp": datetime.now().isoformat(),
+                            "content": content,
+                            "file_index": idx,
+                            "chunk_index": 0
+                        })
+                        task_logger.info(f"[Task {task_id}] [Stream] 收到内容片段，长度: {len(content)} 字符, 内容: {content[:100]}{'...' if len(content) > 100 else ''}")
+                        if len(task_info["stream_content"]) > 100:
+                            task_info["stream_content"] = task_info["stream_content"][-50:]
+                        with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                            json.dump(task_info, f, indent=2)
+                    
                     # 定义进度回调函数
                     async def progress_callback(event_type):
                         nonlocal ai_progress_task
@@ -1269,7 +1508,7 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                             with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
                                 json.dump(task_info, f, indent=2)
                             
-                            logger.info(f"[Task {task_id}] 开始AI分析")
+                            task_logger.info(f"[Task {task_id}] 开始AI分析")
                             
                             # 启动进度递增任务
                             ai_progress_task = asyncio.create_task(ai_progress_incrementer())
@@ -1278,7 +1517,8 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                         file_path=file_path, 
                         resume=True, 
                         force_restart=True,
-                        progress_callback=progress_callback
+                        progress_callback=progress_callback,
+                        content_callback=content_callback
                     )
                     all_results.append(result)
                     
@@ -1298,7 +1538,7 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                         with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
                             json.dump(task_info, f, indent=2)
                     
-                    logger.info(f"[Task {task_id}] 文件处理完成，状态: {result.status}")
+                    task_logger.info(f"[Task {task_id}] 文件处理完成，状态: {result.status}")
 
                     if result.status == "completed":
                         # 更新状态：生成报告（阶段3：86%-95%）
@@ -1308,11 +1548,24 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                         with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
                             json.dump(task_info, f, indent=2)
                         
-                        report = report_generator.generate_report(result)
-                        # 根据来源添加前缀区分：report_upload 或 report_server
-                        prefix = f"report_{source}_【{Path(file_path).stem}】"
-                        saved_files = report_generator.save_report(report, format="html+md+pdf+word", prefix=prefix)
-                        logger.info(f"[Task {task_id}] 报告已保存: {saved_files}")
+                        task_logger.info(f"[Task {task_id}] 开始生成报告...")
+                        
+                        try:
+                            report = report_generator.generate_report(result)
+                            task_logger.info(f"[Task {task_id}] 报告生成完成")
+                            
+                            # 根据来源添加前缀区分：report_upload 或 report_server
+                            prefix = f"report_{source}_【{Path(file_path).stem}】"
+                            task_logger.info(f"[Task {task_id}] 开始保存报告...")
+                            
+                            saved_files = report_generator.save_report(report, format="html+md+pdf+word", prefix=prefix)
+                            task_logger.info(f"[Task {task_id}] 报告已保存: {saved_files}")
+                        except Exception as e:
+                            task_logger.error(f"[Task {task_id}] 报告生成失败: {str(e)}")
+                            import traceback
+                            task_logger.error(traceback.format_exc())
+                            saved_files = []
+                        
                         for saved_file in saved_files:
                             file_type = "html" if saved_file.endswith(".html") else "pdf" if saved_file.endswith(".pdf") else "word" if saved_file.endswith(".docx") else "markdown" if saved_file.endswith(".md") else "json"
                             report_entry = {
@@ -1326,16 +1579,16 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                                     with open(saved_file, 'r', encoding='utf-8') as f:
                                         report_entry["content"] = f.read()
                                 except Exception as e:
-                                    logger.warning(f"[Task {task_id}] 读取{file_type}文件内容失败: {e}")
+                                    task_logger.warning(f"[Task {task_id}] 读取{file_type}文件内容失败: {e}")
                             all_reports.append(report_entry)
                         processed_files += 1
                     else:
-                        logger.warning(f"[Task {task_id}] 文件处理未完成，状态: {result.status}")
+                        task_logger.warning(f"[Task {task_id}] 文件处理未完成，状态: {result.status}")
 
             except Exception as e:
                 import traceback
-                logger.error(f"[Task {task_id}] 处理文件 {file_path} 时出错: {str(e)}")
-                logger.error(traceback.format_exc())
+                task_logger.error(f"[Task {task_id}] 处理文件 {file_path} 时出错: {str(e)}")
+                task_logger.error(traceback.format_exc())
                 task_info["message"] = f"处理文件 {Path(file_path).name} 时出错: {str(e)}"
                 continue
 
@@ -1348,7 +1601,7 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                 # 根据来源添加前缀区分：report_upload_combined 或 report_server_combined
                 prefix = f"report_{source}_combined"
                 combined_files = report_generator.save_report(combined_report, format="html+md+pdf+word", prefix=prefix)
-                logger.info(f"[Task {task_id}] 综合报告已保存: {combined_files}")
+                task_logger.info(f"[Task {task_id}] 综合报告已保存: {combined_files}")
                 for saved_file in combined_files:
                     file_type = "html" if saved_file.endswith(".html") else "pdf" if saved_file.endswith(".pdf") else "word" if saved_file.endswith(".docx") else "markdown" if saved_file.endswith(".md") else "json"
                     report_entry = {
@@ -1362,15 +1615,21 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                             with open(saved_file, 'r', encoding='utf-8') as f:
                                 report_entry["content"] = f.read()
                         except Exception as e:
-                            logger.warning(f"[Task {task_id}] 读取{file_type}文件内容失败: {e}")
+                            task_logger.warning(f"[Task {task_id}] 读取{file_type}文件内容失败: {e}")
                     all_reports.append(report_entry)
             except Exception as e:
-                logger.error(f"[Task {task_id}] 生成综合报告失败: {str(e)}")
+                task_logger.error(f"[Task {task_id}] 生成综合报告失败: {str(e)}")
 
+        task_logger.info(f"[Task {task_id}] 准备更新状态为 completed，processed_files={processed_files}")
         task_info["progress"] = 100.0
         task_info["status"] = "completed"
         task_info["message"] = f"处理完成！共处理 {processed_files} 个文件"
         task_info["reports"] = all_reports
+        
+        task_logger.info(f"[Task {task_id}] 状态已更新，准备保存到文件")
+        with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+            json.dump(task_info, f, indent=2)
+        task_logger.info(f"[Task {task_id}] 状态已保存到文件")
 
         if all_results and user_id:
             try:
@@ -1397,9 +1656,9 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
                         }
                     }
                     storage.create(user_id, history_record)
-                logger.info(f"[Task {task_id}] 已持久化 {len(all_results)} 条历史报告")
+                task_logger.info(f"[Task {task_id}] 已持久化 {len(all_results)} 条历史报告")
             except Exception as e:
-                logger.error(f"[Task {task_id}] 持久化历史报告失败: {e}")
+                task_logger.error(f"[Task {task_id}] 持久化历史报告失败: {e}")
 
     except Exception as e:
         import traceback
@@ -1407,15 +1666,15 @@ h1{{color:#007AFF;}}pre{{background:#f5f5f7;padding:1rem;border-radius:8px;}}</s
         task_info["error"] = str(e)
         task_info["message"] = f"处理失败: {str(e)}"
         if 'logger' in locals():
-            logger.error(f"处理任务 {task_id} 失败: {str(e)}")
-            logger.error(traceback.format_exc())
+            task_logger.error(f"处理任务 {task_id} 失败: {str(e)}")
+            task_logger.error(traceback.format_exc())
     finally:
         if "llm_client" in locals():
             try:
                 await llm_client.close()
             except Exception as e:
                 if 'logger' in locals():
-                    logger.warning(f"关闭 LLM 客户端时出错: {str(e)}")
+                    task_logger.warning(f"关闭 LLM 客户端时出错: {str(e)}")
 
 
 # ==================== 用户识别接口（无鉴权版） ====================
@@ -1456,6 +1715,115 @@ async def root():
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "message": "Log Analyzer API is running"}
+
+
+@app.get("/api/stream/{task_id}")
+async def stream_task_status(task_id: str, user_id: str = Header(None)):
+    """SSE 流式输出端点 - 实时传输分析进度和内容"""
+    from starlette.responses import StreamingResponse
+    
+    async def event_generator():
+        last_progress = -1
+        last_content_index = 0
+        task_file = TASKS_DIR / f"{task_id}.json"
+        total_chunks_sent = 0
+        total_content_length = 0
+        connection_start_time = datetime.now()
+        
+        task_logger.info("=" * 80)
+        task_logger.info(f"[SSE Stream] 新的流式连接请求")
+        task_logger.info(f"  Task ID: {task_id}")
+        task_logger.info(f"  User ID: {user_id}")
+        task_logger.info(f"  Connection Time: {connection_start_time.isoformat()}")
+        task_logger.info("=" * 80)
+        
+        try:
+            while True:
+                if not task_file.exists():
+                    task_logger.error(f"[SSE Stream] 任务文件不存在: {task_file}")
+                    yield f"event: error\ndata: {json.dumps({'message': '任务不存在', 'task_id': task_id})}\n\n"
+                    break
+                
+                with open(task_file, 'r') as f:
+                    task_info = json.load(f)
+                
+                status = task_info.get("status", "unknown")
+                
+                if task_info.get("progress", 0) > last_progress:
+                    last_progress = task_info["progress"]
+                    progress_data = {
+                        "task_id": task_id,
+                        "status": status,
+                        "progress": task_info["progress"],
+                        "message": task_info.get("message", ""),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    task_logger.info(f"[SSE Stream] 发送进度更新 - Task: {task_id}, Progress: {task_info['progress']}%, Message: {task_info.get('message', '')[:50]}")
+                    yield f"event: progress\ndata: {json.dumps(progress_data, ensure_ascii=False)}\n\n"
+                
+                stream_content = task_info.get("stream_content", [])
+                if stream_content and len(stream_content) > last_content_index:
+                    for content_item in stream_content[last_content_index:]:
+                        content_data = {
+                            "task_id": task_id,
+                            "content": content_item["content"],
+                            "timestamp": content_item["timestamp"],
+                            "file_index": content_item["file_index"]
+                        }
+                        chunk_length = len(content_item["content"])
+                        total_chunks_sent += 1
+                        total_content_length += chunk_length
+                        task_logger.info(f"[SSE Stream] 发送内容片段 #{total_chunks_sent} - Task: {task_id}, Length: {chunk_length} chars, Total: {total_content_length} chars")
+                        yield f"event: stream_content\ndata: {json.dumps(content_data, ensure_ascii=False)}\n\n"
+                    last_content_index = len(stream_content)
+                
+                if status == "completed":
+                    report_info = {
+                        "task_id": task_id,
+                        "report_id": task_info.get("report_id"),
+                        "message": task_info.get("message", ""),
+                        "reports": task_info.get("reports", [])
+                    }
+                    task_logger.info(f"[SSE Stream] 发送报告就绪信号 - Task: {task_id}, Report ID: {task_info.get('report_id')}")
+                    yield f"event: report_ready\ndata: {json.dumps(report_info, ensure_ascii=False)}\n\n"
+                    break
+                
+                if status in ["cancelled", "failed"]:
+                    error_info = {
+                        "task_id": task_id,
+                        "status": status,
+                        "message": task_info.get("message", ""),
+                        "error": task_info.get("error", "")
+                    }
+                    task_logger.info(f"[SSE Stream] 任务状态变更 - Task: {task_id}, Status: {status}, Message: {task_info.get('message', '')}")
+                    yield f"event: {status}\ndata: {json.dumps(error_info, ensure_ascii=False)}\n\n"
+                    break
+                
+                await asyncio.sleep(0.2)
+                
+        except Exception as e:
+            task_logger.error(f"[SSE Stream Error] Task: {task_id}, Error: {str(e)}")
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+        finally:
+            connection_duration = (datetime.now() - connection_start_time).total_seconds()
+            task_logger.info("=" * 80)
+            task_logger.info(f"[SSE Stream] 连接关闭")
+            task_logger.info(f"  Task ID: {task_id}")
+            task_logger.info(f"  User ID: {user_id}")
+            task_logger.info(f"  总片段数: {total_chunks_sent}")
+            task_logger.info(f"  总内容长度: {total_content_length} 字符")
+            task_logger.info(f"  连接时长: {connection_duration:.2f} 秒")
+            task_logger.info("=" * 80)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*"
+        }
+    )
 
 
 @app.get("/api/docs/api")
@@ -1694,10 +2062,10 @@ async def process_files_from_path(
         from log_analyzer.checkpoint.manager import CheckpointManager
         from log_analyzer.processor.chunk_processor import ChunkProcessor
         
-        parser = LogParser(chunk_size=50000)
+        parser = LogParser(chunk_size=500000)
         
-        user_reports_dir = PROJECT_ROOT / "log_analyzer" / "users" / user_id / "reports"
-        user_checkpoints_dir = PROJECT_ROOT / "log_analyzer" / "users" / user_id / "checkpoints"
+        user_reports_dir = PROJECT_ROOT.parent / "users" / user_id / "reports"
+        user_checkpoints_dir = PROJECT_ROOT.parent / "users" / user_id / "checkpoints"
         ensure_dir(str(user_reports_dir))
         ensure_dir(str(user_checkpoints_dir))
         
@@ -1711,7 +2079,7 @@ async def process_files_from_path(
             parser=parser,
             llm_client=llm_client,
             checkpoint_manager=checkpoint_manager,
-            chunk_size=50000,
+            chunk_size=500000,
             enable_checkpoint=False
         )
         
@@ -1729,6 +2097,16 @@ async def process_files_from_path(
         total_files = len(file_paths)
         
         for idx, file_path in enumerate(file_paths):
+            # 检查任务是否被取消
+            if is_cancelled():
+                task_logger.warning(f"[Task {task_id}] 任务已被取消，停止处理")
+                task_info["status"] = "cancelled"
+                task_info["message"] = "任务已被用户取消"
+                task_info.pop("start_time", None)
+                with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
+                    json.dump(task_info, f, indent=2)
+                return
+            
             file_name = Path(file_path).name
             task_info["message"] = f"正在处理文件 {idx + 1}/{total_files}: {file_name}"
             task_info["progress"] = idx / total_files * 80
@@ -1869,10 +2247,20 @@ async def process_files_from_path(
                         with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
                             json.dump(task_info, f, indent=2)
                         
-                        report = report_generator.generate_report(result)
-                        saved_files = report_generator.save_report(report, format="html+md+pdf+word", prefix=f"report_path_【{Path(file_path).stem}】")
-                        
-                        task_logger.info(f"[Task {task_id}] 报告已保存: {saved_files}")
+                        try:
+                            report = report_generator.generate_report(result)
+                            task_logger.info(f"[Task {task_id}] 报告生成完成")
+                            
+                            prefix = f"report_{source}_【{Path(file_path).stem}】"
+                            task_logger.info(f"[Task {task_id}] 开始保存报告...")
+                            
+                            saved_files = report_generator.save_report(report, format="html+md+pdf+word", prefix=prefix)
+                            task_logger.info(f"[Task {task_id}] 报告已保存: {saved_files}")
+                        except Exception as e:
+                            task_logger.error(f"[Task {task_id}] 报告生成失败: {str(e)}")
+                            import traceback
+                            task_logger.error(traceback.format_exc())
+                            saved_files = []
                         
                         for saved_file in saved_files:
                             file_type = "html" if saved_file.endswith(".html") else \
@@ -1945,6 +2333,9 @@ async def process_files_from_path(
         task_info["reports"] = all_reports
         task_info["end_time"] = datetime.now().isoformat()
         
+        # 清理开始时间（不再需要超时检测）
+        task_info.pop("start_time", None)
+        
         with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
             json.dump(task_info, f, indent=2)
         
@@ -1965,6 +2356,9 @@ async def process_files_from_path(
         task_info["status"] = "failed"
         task_info["error"] = str(e)
         task_info["message"] = f"任务失败: {str(e)}"
+        
+        # 清理开始时间（不再需要超时检测）
+        task_info.pop("start_time", None)
         
         with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
             json.dump(task_info, f, indent=2)
@@ -2343,6 +2737,13 @@ async def start_processing(
             "data": None
         }, status_code=400)
 
+    # 处理 chunk_size 参数
+    # 默认值设为 500000，process_log_files 和 ChunkProcessor 内部会根据内存自动调整
+    if request.chunk_size is not None and request.chunk_size > 0:
+        actual_chunk_size = request.chunk_size
+    else:
+        actual_chunk_size = 500000
+
     user_reports_dir = get_user_reports_dir(current_user["user_id"])
     user_checkpoints_dir = get_user_checkpoints_dir(current_user["user_id"])
 
@@ -2363,7 +2764,7 @@ async def start_processing(
         process_log_files,
         task_id,
         file_paths,
-        request.chunk_size,
+        actual_chunk_size,  # 使用处理后的 chunk_size
         request.force_restart,
         request.source  # 传递来源参数
     )
@@ -2381,14 +2782,26 @@ async def start_processing(
 @app.get("/api/task/{task_id}", response_model=TaskStatus)
 async def get_task_status(task_id: str, current_user: Dict = Depends(get_current_user)):
     """获取任务状态（需要认证，仅返回属于当前用户的任务）"""
-    if task_id not in processing_tasks:
+    task_info = None
+    
+    if task_id in processing_tasks:
+        task_info = processing_tasks[task_id]
+    else:
+        task_file = TASKS_DIR / f"{task_id}.json"
+        if task_file.exists():
+            try:
+                with open(task_file, 'r') as f:
+                    task_info = json.load(f)
+            except Exception as e:
+                logger.error(f"[Task {task_id}] 加载任务文件失败: {e}")
+    
+    if not task_info:
         return JSONResponse({
             "code": 1,
             "message": "任务不存在",
             "data": None
         }, status_code=404)
 
-    task_info = processing_tasks[task_id]
     if task_info.get("user_id") != current_user["user_id"]:
         return JSONResponse({
             "code": 1,
@@ -2412,14 +2825,26 @@ async def get_task_status(task_id: str, current_user: Dict = Depends(get_current
 @app.post("/api/task/{task_id}/cancel")
 async def cancel_task(task_id: str, current_user: Dict = Depends(get_current_user)):
     """取消正在执行的任务（需要认证，仅能取消属于当前用户的任务）"""
-    if task_id not in processing_tasks:
+    task_info = None
+    
+    if task_id in processing_tasks:
+        task_info = processing_tasks[task_id]
+    else:
+        task_file = TASKS_DIR / f"{task_id}.json"
+        if task_file.exists():
+            try:
+                with open(task_file, 'r') as f:
+                    task_info = json.load(f)
+            except Exception as e:
+                logger.error(f"[Task {task_id}] 加载任务文件失败: {e}")
+    
+    if not task_info:
         return JSONResponse({
             "code": 1,
             "message": "任务不存在",
             "data": None
         }, status_code=404)
 
-    task_info = processing_tasks[task_id]
     if task_info.get("user_id") != current_user["user_id"]:
         return JSONResponse({
             "code": 1,
@@ -2427,7 +2852,6 @@ async def cancel_task(task_id: str, current_user: Dict = Depends(get_current_use
             "data": None
         }, status_code=403)
 
-    # 检查任务状态
     if task_info["status"] == "completed":
         return JSONResponse({
             "code": 1,
@@ -2442,12 +2866,23 @@ async def cancel_task(task_id: str, current_user: Dict = Depends(get_current_use
             "data": None
         }, status_code=400)
 
-    # 设置任务为取消状态
     task_info["status"] = "cancelled"
     task_info["message"] = "任务已被用户取消"
     task_info["progress"] = task_info.get("progress", 0)
+    task_info["cancelled_by"] = current_user["user_id"]
+    task_info["cancelled_at"] = datetime.now().isoformat()
 
-    # 保存任务状态到文件
+    if task_id in processing_tasks:
+        processing_tasks[task_id] = task_info
+        
+        # 尝试取消后台任务
+        if "background_task" in task_info:
+            background_task = task_info.get("background_task")
+            if background_task and isinstance(background_task, asyncio.Task):
+                if not background_task.done():
+                    background_task.cancel()
+                    logger.info(f"[Task {task_id}] 已发送取消请求到后台任务")
+    
     with open(TASKS_DIR / f"{task_id}.json", 'w') as f:
         json.dump(task_info, f, indent=2)
 
@@ -2489,6 +2924,51 @@ async def download_file(file_path: str, current_user: Dict = Depends(get_current
             filename=path.name,
             media_type="application/octet-stream"
         )
+    except Exception as e:
+        return JSONResponse({
+            "code": 1,
+            "message": str(e),
+            "data": None
+        }, status_code=500)
+
+
+@app.get("/api/preview/{file_path:path}")
+async def preview_file(file_path: str, current_user: Dict = Depends(get_current_user)):
+    """预览文件内容（用于前端查看报告，不触发下载）"""
+    try:
+        # 解码 URL 编码的路径
+        from urllib.parse import unquote
+        decoded_path = unquote(file_path)
+        path = Path(decoded_path)
+        
+        if not path.exists():
+            return JSONResponse({
+                "code": 1,
+                "message": f"文件不存在: {decoded_path}",
+                "data": None
+            }, status_code=404)
+
+        user_reports_dir = get_user_reports_dir(current_user["user_id"])
+        user_upload_dir = get_user_upload_dir(current_user["user_id"])
+
+        if not (str(path).startswith(str(user_reports_dir)) or str(path).startswith(str(user_upload_dir))):
+            return JSONResponse({
+                "code": 1,
+                "message": f"无权访问此文件: {decoded_path}",
+                "data": None
+            }, status_code=403)
+
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        return JSONResponse({
+            "code": 0,
+            "message": "success",
+            "data": {
+                "content": content,
+                "filename": path.name
+            }
+        })
     except Exception as e:
         return JSONResponse({
             "code": 1,

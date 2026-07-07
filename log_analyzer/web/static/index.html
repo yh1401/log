@@ -596,6 +596,99 @@
             display: none;
         }
 
+        .stream-container {
+            background: linear-gradient(135deg, var(--apple-light-gray) 0%, rgba(0, 113, 227, 0.03) 100%);
+            border: 1px solid var(--apple-border-color);
+            border-radius: calc(var(--apple-radius) - 4px);
+            margin-top: 16px;
+            overflow: hidden;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+        }
+
+        .stream-header {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            background: rgba(0, 113, 227, 0.05);
+            border-bottom: 1px solid var(--apple-border-color);
+        }
+
+        .stream-icon {
+            font-size: 1rem;
+            margin-right: 8px;
+        }
+
+        .stream-title {
+            flex: 1;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--apple-blue);
+        }
+
+        .stream-close {
+            background: none;
+            border: none;
+            font-size: 0.875rem;
+            color: var(--apple-gray);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+
+        .stream-close:hover {
+            background: rgba(0, 0, 0, 0.05);
+            color: var(--apple-dark-gray);
+        }
+
+        .stream-content {
+            padding: 16px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+            font-size: 0.8125rem;
+            line-height: 1.6;
+            color: var(--apple-dark-gray);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .stream-content .stream-chunk {
+            animation: fadeIn 0.3s ease;
+        }
+
+        .stream-footer {
+            padding: 8px 16px;
+            background: rgba(0, 0, 0, 0.02);
+            border-top: 1px solid var(--apple-border-color);
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .stream-status {
+            font-size: 0.75rem;
+            color: var(--apple-gray);
+        }
+
+        .stream-status.active {
+            color: var(--apple-success);
+        }
+
+        .stream-status.error {
+            color: var(--apple-error);
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(4px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
         .reports-container {
             margin-top: 24px;
         }
@@ -1006,9 +1099,10 @@
                 <div class="file-list" id="uploadedFiles"></div>
 
                 <div class="settings-section">
-                    <div class="setting-item">
+                    <!-- 分块大小设置已隐藏，后台默认500万行 -->
+                    <div class="setting-item" style="display: none;">
                         <label class="setting-label">分块大小 (行数)</label>
-                        <input type="number" class="setting-input" id="chunkSize" value="1000000" min="10000" max="10000000">
+                        <input type="number" class="setting-input" id="chunkSize" value="5000000" min="5000000" max="10000000">
                     </div>
                     <div class="setting-item">
                         <label class="setting-label checkbox-label">
@@ -1080,6 +1174,18 @@
                         <div class="progress-fill" id="progressFill"></div>
                     </div>
                     <div class="status-text" id="statusText">准备中...</div>
+                </div>
+
+                <div class="stream-container" id="streamContainer" style="display: none;">
+                    <div class="stream-header">
+                        <span class="stream-icon">📡</span>
+                        <span class="stream-title">实时分析结果</span>
+                        <button class="stream-close" onclick="toggleStreamContainer()">✕</button>
+                    </div>
+                    <div class="stream-content" id="streamContent"></div>
+                    <div class="stream-footer">
+                        <span class="stream-status" id="streamStatus">连接中...</span>
+                    </div>
                 </div>
 
                 <div id="errorMessage" class="error-message"></div>
@@ -1551,6 +1657,8 @@
         let taskPollInterval = null;
         let reconnectAttempts = 0;
         let maxReconnectAttempts = 10;
+        let eventSource = null;
+        let streamContent = '';
 
         const STORAGE_KEYS = {
             ACTIVE_TASK: 'logAnalyzer.activeTask',
@@ -1559,6 +1667,103 @@
         };
 
         const API_BASE = window.location.origin;
+
+        function buildStreamUrl(taskId) {
+            return `${API_BASE}/api/stream/${taskId}`;
+        }
+
+        function startStream(taskId) {
+            stopStream();
+            
+            const streamContainer = document.getElementById('streamContainer');
+            const streamContentEl = document.getElementById('streamContent');
+            const streamStatus = document.getElementById('streamStatus');
+            
+            streamContent = '';
+            streamContentEl.textContent = '';
+            streamContainer.style.display = 'block';
+            streamStatus.textContent = '连接中...';
+            streamStatus.className = 'stream-status';
+            
+            try {
+                eventSource = new EventSource(buildStreamUrl(taskId));
+                
+                eventSource.addEventListener('progress', function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        streamStatus.textContent = `进度: ${data.progress}%`;
+                        streamStatus.className = 'stream-status active';
+                    } catch (e) {
+                        console.error('解析进度事件失败:', e);
+                    }
+                });
+                
+                eventSource.addEventListener('stream_content', function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        streamContent += data.content;
+                        streamContentEl.textContent = streamContent;
+                        streamContentEl.scrollTop = streamContentEl.scrollHeight;
+                        streamStatus.textContent = '接收中...';
+                        streamStatus.className = 'stream-status active';
+                    } catch (e) {
+                        console.error('解析流式内容事件失败:', e);
+                    }
+                });
+                
+                eventSource.addEventListener('report_ready', function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        streamStatus.textContent = '报告已生成';
+                        streamStatus.className = 'stream-status active';
+                    } catch (e) {
+                        console.error('解析报告就绪事件失败:', e);
+                    }
+                });
+                
+                eventSource.addEventListener('error', function(event) {
+                    if (eventSource.readyState === EventSource.CLOSED) {
+                        streamStatus.textContent = '连接已关闭';
+                        streamStatus.className = 'stream-status error';
+                    } else {
+                        streamStatus.textContent = '连接错误';
+                        streamStatus.className = 'stream-status error';
+                    }
+                });
+                
+                eventSource.addEventListener('failed', function(event) {
+                    streamStatus.textContent = '任务失败';
+                    streamStatus.className = 'stream-status error';
+                });
+                
+                eventSource.addEventListener('cancelled', function(event) {
+                    streamStatus.textContent = '任务已取消';
+                    streamStatus.className = 'stream-status error';
+                });
+                
+            } catch (e) {
+                console.error('创建 EventSource 失败:', e);
+                streamStatus.textContent = '流式输出不可用';
+                streamStatus.className = 'stream-status error';
+            }
+        }
+
+        function stopStream() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            streamContent = '';
+        }
+
+        function toggleStreamContainer() {
+            const container = document.getElementById('streamContainer');
+            if (container.style.display === 'none') {
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
+            }
+        }
 
         function getCurrentUserId() {
             return localStorage.getItem(STORAGE_KEYS.USER_ID) || 'hanmeimei';
@@ -2589,7 +2794,7 @@ let selectedServerFiles = [];
         async function startProcessing() {
             if (selectedFiles.length === 0) return;
 
-            const chunkSize = parseInt(document.getElementById('chunkSize').value);
+            // 分块大小已隐藏，不再从前端传递，后台默认500万行
             const forceRestart = document.getElementById('forceRestart').checked;
             const useLlm = document.getElementById('useLlm').checked;
 
@@ -2629,7 +2834,7 @@ let selectedServerFiles = [];
                             body: JSON.stringify({
                                 file_path: file.path,
                                 source: 'server',  // 标识来源
-                                chunk_size: chunkSize,
+                                // chunk_size 不传递，后台使用默认值500万行
                                 force_restart: forceRestart,
                                 use_llm: useLlm
                             })
@@ -2645,7 +2850,7 @@ let selectedServerFiles = [];
                             body: JSON.stringify({
                                 file_path: file.path,
                                 source: 'upload',  // 标识来源
-                                chunk_size: chunkSize,
+                                // chunk_size 不传递，后台使用默认值500万行
                                 force_restart: forceRestart,
                                 use_llm: useLlm
                             })
@@ -2748,7 +2953,10 @@ let selectedServerFiles = [];
                 let lastProgress = 0;
                 let lastTime = startTime;
 
+                startStream(taskInfo.task_id);
+
                 const stop = () => {
+                    stopStream();
                     if (taskPollInterval) {
                         clearTimeout(taskPollInterval);
                         taskPollInterval = null;
@@ -2907,9 +3115,9 @@ let selectedServerFiles = [];
 
             container.innerHTML = statsHtml + `
                 <div class="report-list">
-                    ${reports.map(report => {
-                        const isMarkdown = report.type === 'markdown';
-                        const isHtml = report.type === 'html';
+                    ${reports.map((report, index) => {
+                        const isMarkdown = report.type === 'markdown' || report.type === 'md';
+                        const isHtml = report.type === 'html' || report.type === 'htm';
                         return `
                             <div class="report-item">
                                 <div class="report-info">
@@ -2919,8 +3127,8 @@ let selectedServerFiles = [];
                                     </div>
                                 </div>
                                 <div class="report-actions">
-                                    ${isMarkdown && report.content ? `<button class="btn btn-secondary" onclick="viewMarkdownReport('${encodeURIComponent(report.name)}', '${encodeURIComponent(report.content)}')">查看</button>` : ''}
-                                    ${isHtml && report.content ? `<button class="btn btn-secondary" onclick="viewHtmlReport('${encodeURIComponent(report.name)}', '${encodeURIComponent(report.content)}')">查看</button>` : ''}
+                                    ${isMarkdown ? `<button class="btn btn-secondary view-report-btn" data-index="${index}" data-type="markdown">查看</button>` : ''}
+                                    ${isHtml ? `<button class="btn btn-secondary view-report-btn" data-index="${index}" data-type="html">查看</button>` : ''}
                                     <button class="btn btn-primary" onclick="downloadReport('${encodeURIComponent(report.path)}')">下载</button>
                                 </div>
                             </div>
@@ -2928,10 +3136,58 @@ let selectedServerFiles = [];
                     }).join('')}
                 </div>
             `;
+
+            // 添加事件监听器
+            container.querySelectorAll('.view-report-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const index = parseInt(this.dataset.index);
+                    const type = this.dataset.type;
+                    const report = reports[index];
+                    if (type === 'markdown') {
+                        viewGeneratedMarkdown(report.name, report.content || '');
+                    } else if (type === 'html') {
+                        viewGeneratedHtml(report.name, report.content || '');
+                    }
+                });
+            });
         }
 
         async function downloadReport(path) {
             window.open(`/api/download/${decodeURIComponent(path)}`, '_blank');
+        }
+
+        function viewGeneratedMarkdown(title, content) {
+            const modal = document.getElementById('markdownPreviewModal');
+            const titleElement = document.getElementById('markdownModalTitle');
+            const contentElement = document.getElementById('markdownPreviewContent');
+            
+            // 设置标题
+            titleElement.textContent = title || '报告预览';
+            
+            // 将Markdown转换为HTML并显示
+            contentElement.innerHTML = markdownToHtml(content || '暂无内容');
+            
+            // 显示模态框
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+        }
+
+        function viewGeneratedHtml(title, content) {
+            const modal = document.getElementById('htmlPreviewModal');
+            const titleElement = document.getElementById('htmlModalTitle');
+            const iframe = document.getElementById('htmlPreviewContent');
+            
+            // 设置标题
+            titleElement.textContent = title || '报告预览';
+            
+            // 直接使用HTML内容创建Blob URL
+            const blob = new Blob([content || '<html><body><p>暂无内容</p></body></html>'], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            iframe.src = url;
+            
+            // 显示模态框
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
         }
 
         function viewMarkdownReport(title, content) {
@@ -3016,7 +3272,7 @@ let selectedServerFiles = [];
         function renderHistory(reports) {
             const container = document.getElementById('historySection');
             const MAX_DISPLAY_COUNT = 50;
-            const DOWNLOADABLE_TYPES = ['pdf', 'word'];
+            const DOWNLOADABLE_TYPES = ['pdf', 'word', 'markdown', 'html'];
 
             if (reports.length === 0) {
                 container.innerHTML = `
@@ -3093,22 +3349,48 @@ let selectedServerFiles = [];
         }
 
         function viewHtmlReport(title, htmlContent) {
-            const modal = document.getElementById('htmlPreviewModal');
-            const titleElement = document.getElementById('htmlModalTitle');
-            const iframe = document.getElementById('htmlPreviewContent');
-            
-            // 设置标题
-            titleElement.textContent = decodeURIComponent(title);
-            
-            // 将HTML内容写入iframe
-            const doc = iframe.contentDocument || iframe.contentWindow.document;
-            doc.open();
-            doc.write(decodeURIComponent(htmlContent));
-            doc.close();
-            
-            // 显示模态框
-            modal.style.display = 'flex';
-            document.body.style.overflow = 'hidden';
+            try {
+                const modal = document.getElementById('htmlPreviewModal');
+                const titleElement = document.getElementById('htmlModalTitle');
+                const iframe = document.getElementById('htmlPreviewContent');
+                
+                console.log('viewHtmlReport called:', { title, htmlContentLength: htmlContent?.length });
+                console.log('Modal element:', modal);
+                console.log('Title element:', titleElement);
+                console.log('Iframe element:', iframe);
+                
+                if (!modal) {
+                    console.error('Modal element not found!');
+                    return;
+                }
+                if (!titleElement) {
+                    console.error('Title element not found!');
+                    return;
+                }
+                if (!iframe) {
+                    console.error('Iframe element not found!');
+                    return;
+                }
+                
+                // 设置标题（标题需要解码，因为在HTML渲染时进行了encodeURIComponent）
+                titleElement.textContent = decodeURIComponent(title);
+                
+                // 直接使用HTML内容，不需要额外解码（后端返回的JSON会自动处理转义字符）
+                const blob = new Blob([htmlContent], { type: 'text/html' });
+                const url = URL.createObjectURL(blob);
+                iframe.src = url;
+                
+                console.log('Blob URL created:', url);
+                
+                // 显示模态框
+                modal.style.display = 'flex';
+                document.body.style.overflow = 'hidden';
+                
+                console.log('Modal should be visible now');
+            } catch (error) {
+                console.error('Error in viewHtmlReport:', error);
+                alert('显示报告失败: ' + error.message);
+            }
         }
 
         async function viewHistoryHtml(title, path) {
@@ -3128,7 +3410,7 @@ let selectedServerFiles = [];
                 const content = await response.text();
                 
                 // 使用HTML查看函数显示
-                viewHtmlReport(title, encodeURIComponent(content));
+                viewHtmlReport(title, content);
             } catch (error) {
                 console.error('加载HTML报告失败:', error);
                 alert('加载HTML报告失败: ' + error.message);

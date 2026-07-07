@@ -2,6 +2,7 @@
 
 import os
 import time
+import gc
 import logging
 import asyncio
 import multiprocessing as mp
@@ -9,6 +10,12 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable, Tuple
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
 
 from ..parser.log_parser import LogParser, ParsedLogEntry, LogLevel
 from ..checkpoint.manager import CheckpointManager, Checkpoint
@@ -22,6 +29,289 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+
+MEMORY_THRESHOLD_HIGH = 0.6  # 高水位：60%
+MEMORY_THRESHOLD_CRITICAL = 0.1  # 临界水位：10%（降低阈值，避免频繁GC）
+MEMORY_THRESHOLD_LOW = 0.5  # 低水位：50%
+
+# GC冷却时间（秒），避免短时间内多次GC
+_GC_COOLDOWN = 5.0
+_last_gc_time = 0.0
+
+
+def log_memory_usage(label: str):
+    """记录当前内存使用情况"""
+    if not HAS_PSUTIL:
+        return
+    try:
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        mem_percent = process.memory_percent()
+        mem = psutil.virtual_memory()
+        available_ratio = mem.available / mem.total
+        logger.info(f"[Memory] {label} - RSS: {mem_info.rss / 1024 / 1024:.2f} MB, "
+                    f"VMS: {mem_info.vms / 1024 / 1024:.2f} MB, "
+                    f"Percent: {mem_percent:.1f}%, "
+                    f"Available: {available_ratio*100:.1f}%")
+    except Exception as e:
+        logger.warning(f"[Memory] Failed to log memory usage: {e}")
+
+
+def get_memory_status() -> Dict[str, float]:
+    """获取当前内存状态"""
+    if not HAS_PSUTIL:
+        return {'available_ratio': 0.15, 'used_percent': 85.0, 'available_mb': 256.0, 'total_mb': 2048.0}
+    try:
+        mem = psutil.virtual_memory()
+        return {
+            'available_ratio': mem.available / mem.total,
+            'used_percent': mem.percent,
+            'available_mb': mem.available / 1024 / 1024,
+            'total_mb': mem.total / 1024 / 1024
+        }
+    except Exception as e:
+        logger.warning(f"[Memory] Failed to get memory status: {e}")
+        return {'available_ratio': 0.15, 'used_percent': 85.0, 'available_mb': 256.0, 'total_mb': 2048.0}
+
+
+def calculate_optimal_chunk_size(total_lines: int, file_size_mb: float, current_chunk_size: int = 500000) -> int:
+    """根据内存量计算最优的chunk_size
+    
+    策略：
+    1. 获取可用内存
+    2. 根据文件大小和可用内存比例计算合适的chunk_size
+    3. 确保每个chunk占用的内存不超过可用内存的20%
+    """
+    status = get_memory_status()
+    available_mb = status.get('available_mb', 2048.0)
+    
+    # 估算每条日志条目占用的内存（保守估计）
+    # 一条典型的日志条目大约占用 500-1000 bytes
+    ESTIMATED_BYTES_PER_ENTRY = 800
+    
+    # 计算当前chunk_size对应的内存占用（MB）
+    current_chunk_memory_mb = (current_chunk_size * ESTIMATED_BYTES_PER_ENTRY) / (1024 * 1024)
+    
+    # 目标：每个chunk最多占用可用内存的20%
+    max_chunk_memory_mb = available_mb * 0.2
+    
+    logger.info(f"[Memory] 可用内存: {available_mb:.1f} MB")
+    logger.info(f"[Memory] 当前chunk_size: {current_chunk_size:,}，预计内存: {current_chunk_memory_mb:.1f} MB")
+    logger.info(f"[Memory] 最大允许chunk内存: {max_chunk_memory_mb:.1f} MB")
+    
+    if current_chunk_memory_mb <= max_chunk_memory_mb:
+        logger.info(f"[Memory] 当前chunk_size合适，无需调整")
+        return current_chunk_size
+    
+    # 需要减小chunk_size
+    new_chunk_size = int(max_chunk_memory_mb * (1024 * 1024) / ESTIMATED_BYTES_PER_ENTRY)
+    
+    # 确保最小chunk_size不小于10000
+    new_chunk_size = max(new_chunk_size, 10000)
+    
+    # 确保至少分成2个chunk（如果文件足够大）
+    if total_lines > new_chunk_size * 2:
+        max_possible_chunks = (total_lines + new_chunk_size - 1) // new_chunk_size
+        logger.info(f"[Memory] 需要调整chunk_size: {current_chunk_size:,} -> {new_chunk_size:,}")
+        logger.info(f"[Memory] 预计分块数: {max_possible_chunks}")
+        return new_chunk_size
+    
+    logger.info(f"[Memory] 文件较小，保持chunk_size: {current_chunk_size:,}")
+    return current_chunk_size
+
+
+def ensure_memory_safety() -> bool:
+    """确保内存安全，必要时强制GC（带冷却时间限制）"""
+    global _last_gc_time
+    
+    status = get_memory_status()
+    
+    # 检查是否需要GC（仅在低于临界值且冷却时间已过）
+    if status['available_ratio'] < MEMORY_THRESHOLD_CRITICAL:
+        current_time = time.time()
+        
+        # 如果距离上次GC时间太短，跳过此次检查
+        if current_time - _last_gc_time < _GC_COOLDOWN:
+            return True
+        
+        logger.warning(f"[Memory] 内存临界! 可用 {status['available_ratio']*100:.1f}%，强制GC...")
+        gc.collect()
+        _last_gc_time = time.time()
+        
+        status = get_memory_status()
+        if status['available_ratio'] < MEMORY_THRESHOLD_CRITICAL:
+            logger.error(f"[Memory] GC后内存仍不足: {status['available_ratio']*100:.1f}%")
+            return False
+        logger.info(f"[Memory] GC完成，可用 {status['available_ratio']*100:.1f}%")
+    return True
+
+
+class StreamingStatsAggregator:
+    """流式统计聚合器：边解析边聚合，不保留原始条目"""
+    
+    def __init__(
+        self,
+        max_error_samples: int = 500,
+        max_warn_samples: int = 1000,
+        max_info_samples: int = 200,
+        top_classes_limit: int = 20,
+        top_error_types_limit: int = 20
+    ):
+        self.stats = {
+            'by_level': {},
+            'error_types': {},
+            'patterns': {},
+            'top_classes': {}
+        }
+        self.error_samples = []
+        self.warn_samples = []
+        self.info_samples = []
+        self.max_error_samples = max_error_samples
+        self.max_warn_samples = max_warn_samples
+        self.max_info_samples = max_info_samples
+        self.top_classes_limit = top_classes_limit
+        self.top_error_types_limit = top_error_types_limit
+        
+        self._error_classes_seen = set()
+        self._warn_classes_seen = set()
+        self._info_classes_seen = set()
+        
+        self._chunk_statistics = []
+        self._chunks_info = []
+        
+        self._total_entries = 0
+        self._chunk_count = 0
+    
+    def ingest_chunk(self, entries: List[ParsedLogEntry], chunk_id: int, end_line: int):
+        """摄入一个chunk的数据，即时聚合"""
+        self._chunk_count += 1
+        chunk_error_count = 0
+        chunk_warn_count = 0
+        chunk_info_count = 0
+        
+        for entry in entries:
+            self._total_entries += 1
+            
+            level = entry.level.value if isinstance(entry.level, LogLevel) else str(entry.level)
+            
+            self.stats['by_level'][level] = self.stats['by_level'].get(level, 0) + 1
+            
+            if entry.class_name:
+                self.stats['top_classes'][entry.class_name] = \
+                    self.stats['top_classes'].get(entry.class_name, 0) + 1
+            
+            if entry.error_type:
+                self.stats['error_types'][entry.error_type] = \
+                    self.stats['error_types'].get(entry.error_type, 0) + 1
+            
+            if level in ('ERROR', 'FATAL'):
+                chunk_error_count += 1
+                self._smart_sample(entry, self.error_samples, self.max_error_samples, 
+                                  self._error_classes_seen)
+            elif level == 'WARN':
+                chunk_warn_count += 1
+                self._smart_sample(entry, self.warn_samples, self.max_warn_samples,
+                                  self._warn_classes_seen)
+            elif level == 'INFO':
+                chunk_info_count += 1
+                if len(self.info_samples) < self.max_info_samples:
+                    self._smart_sample(entry, self.info_samples, self.max_info_samples,
+                                      self._info_classes_seen)
+        
+        chunk_statistics = {
+            'chunk_id': chunk_id,
+            'total_entries': len(entries),
+            'error_count': chunk_error_count,
+            'warn_count': chunk_warn_count,
+            'info_count': chunk_info_count
+        }
+        self._chunk_statistics.append(chunk_statistics)
+        self._chunks_info.append((chunk_id, end_line, len(entries)))
+    
+    def _smart_sample(self, entry: ParsedLogEntry, samples_list: list, max_samples: int, 
+                      classes_seen: set):
+        """智能采样：确保每个类都有代表性样本"""
+        if len(samples_list) >= max_samples:
+            return
+        
+        class_name = entry.class_name or 'UNKNOWN'
+        
+        if class_name not in classes_seen:
+            samples_list.append(entry.to_dict())
+            classes_seen.add(class_name)
+        elif len(samples_list) < max_samples // 2:
+            samples_list.append(entry.to_dict())
+    
+    def get_final_stats(self):
+        """获取最终聚合结果，截断到限制数量"""
+        self.stats['top_classes'] = dict(sorted(
+            self.stats['top_classes'].items(),
+            key=lambda x: x[1], reverse=True
+        )[:self.top_classes_limit])
+        
+        self.stats['error_types'] = dict(sorted(
+            self.stats['error_types'].items(),
+            key=lambda x: x[1], reverse=True
+        )[:self.top_error_types_limit])
+        
+        return self.stats
+    
+    def get_chunk_statistics(self):
+        """获取所有chunk的统计信息"""
+        return self._chunk_statistics
+    
+    def get_chunks_info(self):
+        """获取所有chunk的基本信息"""
+        return self._chunks_info
+    
+    def get_sample_data(self):
+        """获取采样数据"""
+        return {
+            'error_entries': self.error_samples,
+            'warn_entries': self.warn_samples,
+            'info_entries': self.info_samples
+        }
+    
+    def get_summary(self):
+        """获取聚合器摘要信息"""
+        return {
+            'total_entries': self._total_entries,
+            'chunk_count': self._chunk_count,
+            'error_samples_count': len(self.error_samples),
+            'warn_samples_count': len(self.warn_samples),
+            'info_samples_count': len(self.info_samples),
+            'memory_estimate_mb': self._estimate_memory_usage()
+        }
+    
+    def _estimate_memory_usage(self):
+        """估算当前聚合器占用的内存（MB），考虑 Python 对象开销"""
+        # Python 对象通常有约 50-100 字节的额外开销
+        OBJECT_OVERHEAD = 56  # 每个 dict 对象的基础开销
+        
+        total_bytes = 0
+        
+        # 计算样本内存
+        for sample in self.error_samples + self.warn_samples + self.info_samples:
+            # 字符串内容
+            for key, value in sample.items():
+                if isinstance(value, str):
+                    total_bytes += len(value.encode('utf-8'))
+                else:
+                    total_bytes += len(str(value))
+            # dict 对象开销
+            total_bytes += OBJECT_OVERHEAD
+        
+        # 计算统计对象内存
+        for stat in self._chunk_statistics:
+            total_bytes += len(str(stat).encode('utf-8')) + OBJECT_OVERHEAD
+        
+        # 计算内部数据结构内存
+        total_bytes += len(self._error_classes_seen) * 50  # set 中每个元素约 50 字节
+        total_bytes += len(self._warn_classes_seen) * 50
+        total_bytes += len(self._info_classes_seen) * 50
+        
+        return total_bytes / 1024 / 1024
 
 
 @dataclass
@@ -68,7 +358,7 @@ class ChunkProcessor:
         parser: LogParser,
         llm_client: Optional[LLMClient],
         checkpoint_manager: CheckpointManager,
-        chunk_size: int = 10000,
+        chunk_size: int = 5000000,
         enable_checkpoint: bool = True,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         parallel_workers: int = 4,
@@ -84,7 +374,7 @@ class ChunkProcessor:
         self.progress_callback = progress_callback
         self.parallel_workers = parallel_workers
         self.enable_parallel_processing = enable_parallel_processing
-        self.merge_threshold = merge_threshold
+        self.merge_threshold = max(1, int(round(merge_threshold)))
         self.use_llm = use_llm
         
         self._checkpoint_batch = []
@@ -92,10 +382,18 @@ class ChunkProcessor:
         
         # 初始化规则分析器（当 use_llm=False 时使用）
         self._rule_based_analyzer = None
+        
+        # 自适应内存控制
+        self._adapt_chunk_size_based_on_memory()
+        
+        # 记录初始内存状态
+        if HAS_PSUTIL:
+            mem = psutil.virtual_memory()
+            logger.info(f"[Memory] 系统可用内存: {mem.available / 1024 / 1024:.0f} MB ({(mem.available/mem.total)*100:.1f}%)")
 
         logger.info("=" * 80)
         logger.info("[ChunkProcessor] 初始化完成")
-        logger.info(f"  Chunk Size: {chunk_size}")
+        logger.info(f"  Chunk Size: {chunk_size:,}")
         logger.info(f"  Checkpoint Enabled: {enable_checkpoint}")
         logger.info(f"  Parallel Workers: {parallel_workers}")
         logger.info(f"  Parallel Processing: {enable_parallel_processing}")
@@ -104,6 +402,47 @@ class ChunkProcessor:
         if not use_llm:
             logger.info("  ⚠️  警告: 使用规则模式，不调用LLM")
         logger.info("=" * 80)
+    
+    def _adapt_chunk_size_based_on_memory(self):
+        """根据系统可用内存自适应调整分块大小"""
+        if not HAS_PSUTIL:
+            logger.info("[Memory] 未检测到 psutil，使用默认分块大小")
+            return
+
+        mem = psutil.virtual_memory()
+        available_ratio = mem.available / mem.total
+        original_size = self.chunk_size
+
+        # 注意：内存紧张时应当减小 chunk_size（缩小每个chunk的条目数）
+        if available_ratio < 0.2:
+            self.chunk_size = max(10000, self.chunk_size // 4)
+            logger.warning(f"[Memory] 内存严重不足 ({available_ratio*100:.1f}%)，大幅减小分块: {original_size:,} -> {self.chunk_size:,}")
+        elif available_ratio < 0.3:
+            self.chunk_size = max(20000, self.chunk_size // 2)
+            logger.warning(f"[Memory] 内存紧张 ({available_ratio*100:.1f}%)，减小分块: {original_size:,} -> {self.chunk_size:,}")
+        elif available_ratio < 0.5:
+            self.chunk_size = int(self.chunk_size * 0.8)
+            logger.info(f"[Memory] 内存偏低 ({available_ratio*100:.1f}%)，适当减小分块: {original_size:,} -> {self.chunk_size:,}")
+        else:
+            logger.info(f"[Memory] 内存充足 ({available_ratio*100:.1f}%)，使用默认分块大小 {self.chunk_size:,}")
+    
+    def _should_use_sequential_mode(self, total_chunks: int) -> bool:
+        """判断是否应降级为顺序处理模式"""
+        if not HAS_PSUTIL:
+            return total_chunks > 3
+        
+        mem_status = get_memory_status()
+        available_ratio = mem_status['available_ratio']
+        
+        if available_ratio < MEMORY_THRESHOLD_CRITICAL:
+            logger.error(f"[Memory] 内存严重不足 ({available_ratio*100:.1f}%)，强制降级为顺序模式")
+            return True
+        
+        if available_ratio < MEMORY_THRESHOLD_LOW or total_chunks > 3:
+            logger.info(f"[Memory] 内存 {available_ratio*100:.1f}% / 分块数 {total_chunks}，使用顺序模式")
+            return True
+        
+        return False
 
     def count_lines(self, file_path: str) -> int:
         start_time = time.time()
@@ -140,7 +479,19 @@ class ChunkProcessor:
             if e.level == LogLevel.ERROR or e.level == LogLevel.FATAL
         ]
 
+        warn_entries = [
+            e.to_dict() for e in entries
+            if e.level == LogLevel.WARN
+        ]
+
+        info_entries = [
+            e.to_dict() for e in entries
+            if e.level == LogLevel.INFO
+        ][:50]
+
         logger.info(f"  Error Entries: {len(error_entries)}")
+        logger.info(f"  Warn Entries: {len(warn_entries)}")
+        logger.info(f"  Info Entries: {len(info_entries)}")
 
         statistics = self.parser.get_error_statistics(entries)
         logger.info(f"[Processor] 错误统计信息: {statistics}")
@@ -150,7 +501,9 @@ class ChunkProcessor:
         result = await self.llm_client.analyze_log_chunk(
             error_entries=error_entries,
             statistics=statistics,
-            chunk_id=chunk_id
+            chunk_id=chunk_id,
+            warn_entries=warn_entries,
+            info_entries=info_entries
         )
 
         logger.info(f"[Processor] Chunk #{chunk_id} 处理完成")
@@ -248,7 +601,8 @@ class ChunkProcessor:
         file_path: str,
         resume: bool = True,
         force_restart: bool = False,
-        progress_callback: callable = None
+        progress_callback: callable = None,
+        content_callback: Optional[Callable[[str], None]] = None
     ) -> ProcessingResult:
         start_total = time.time()
         logger.info("=" * 80)
@@ -275,6 +629,18 @@ class ChunkProcessor:
 
         parse_start = time.time()
         total_lines = self.count_lines(file_path)
+        
+        # 根据内存自动调整chunk_size
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        optimal_chunk_size = calculate_optimal_chunk_size(total_lines, file_size_mb, self.chunk_size)
+        
+        if optimal_chunk_size != self.chunk_size:
+            logger.info(f"[Process File] 自动调整chunk_size: {self.chunk_size:,} -> {optimal_chunk_size:,}")
+            # 创建临时parser使用新的chunk_size
+            temp_parser = LogParser(chunk_size=optimal_chunk_size)
+            self.parser = temp_parser
+            self.chunk_size = optimal_chunk_size
+        
         total_chunks = (total_lines + self.chunk_size - 1) // self.chunk_size
         parse_time = time.time() - parse_start
 
@@ -349,130 +715,102 @@ class ChunkProcessor:
 
         logger.info("[Process File] 开始流式解析文件...")
         progress = ProgressTracker(total_lines, f"Processing {os.path.basename(file_path)}")
+        log_memory_usage("Start processing")
 
         all_entries = []
         analysis_results = []
         chunk_results = {}
         
         try:
-            parsing_start = time.time()
-            all_chunks = []
+            llm_start = time.time()
             
+            # 使用流式聚合器：边解析边聚合，不保留全部entries
+            logger.info("[Process File] 使用流式聚合器进行第一遍扫描...")
+            
+            aggregator = StreamingStatsAggregator(
+                max_error_samples=500,
+                max_warn_samples=1000,
+                max_info_samples=200,
+                top_classes_limit=20,
+                top_error_types_limit=20
+            )
+            
+            parsing_start = time.time()
+            last_progress_time = parsing_start
             for entries, cid, end_line in self.parser.parse_file_stream_mmap(file_path):
                 if cid < start_chunk_id:
                     continue
-                all_chunks.append((entries, cid, end_line))
+
+                aggregator.ingest_chunk(entries, cid, end_line)
+
+                # 定期输出解析进度
+                now = time.time()
+                if now - last_progress_time > 5.0:
+                    elapsed = now - parsing_start
+                    pct = (end_line / total_lines) * 100 if total_lines > 0 else 0
+                    logger.info(f"[Process File] 解析进度: {end_line:,}/{total_lines:,} 行 ({pct:.1f}%), 耗时: {elapsed:.0f}s")
+                    last_progress_time = now
+
+                # 每处理一定数量的chunk后检查内存
+                if cid % 5 == 0:
+                    ensure_memory_safety()
             
             parsing_time = time.time() - parsing_start
-            logger.info(f"[Process File] 文件解析完成，共 {len(all_chunks)} 个块 (耗时: {parsing_time:.2f}s)")
+            total_chunks_count = aggregator._chunk_count
+            all_chunks_info = aggregator.get_chunks_info()
+            
+            log_memory_usage("After first pass scan")
+            
+            aggregator_summary = aggregator.get_summary()
+            logger.info(f"[Process File] 第一遍扫描完成")
+            logger.info(f"  总块数: {total_chunks_count}")
+            logger.info(f"  总条目数: {aggregator_summary['total_entries']:,}")
+            logger.info(f"  错误样本数: {aggregator_summary['error_samples_count']}")
+            logger.info(f"  警告样本数: {aggregator_summary['warn_samples_count']}")
+            logger.info(f"  INFO样本数: {aggregator_summary['info_samples_count']}")
+            logger.info(f"  聚合器内存估算: {aggregator_summary['memory_estimate_mb']:.2f} MB")
+            logger.info(f"  解析耗时: {parsing_time:.2f}s")
+            
+            # 获取最终统计信息
+            all_stats = aggregator.get_final_stats()
+            sample_data = aggregator.get_sample_data()
+            all_chunk_statistics = aggregator.get_chunk_statistics()
 
             # 文件解析完成，准备开始AI分析
             if progress_callback:
                 await progress_callback("ai_analysis_start")
 
-            llm_start = time.time()
-            
-            for entries, cid, end_line in all_chunks:
-                for entry in entries:
-                    all_entries.append(entry)
-                    level_key = entry.level.value if isinstance(entry.level, LogLevel) else str(entry.level)
-                    all_stats['by_level'][level_key] = all_stats['by_level'].get(level_key, 0) + 1
-                    if entry.error_type:
-                        all_stats['error_types'][entry.error_type] = all_stats['error_types'].get(entry.error_type, 0) + 1
-                    if entry.class_name:
-                        all_stats['top_classes'][entry.class_name] = all_stats['top_classes'].get(entry.class_name, 0) + 1
-            
-            total_chunks_count = len(all_chunks)
-            
-            if total_chunks_count <= self.merge_threshold:
-                if self.use_llm and self.llm_client:
-                    logger.info(f"[Process File] 分块数 {total_chunks_count} <= 合并阈值 {self.merge_threshold}，执行合并分析策略")
-                    logger.info(f"[Process File] 将所有 {total_chunks_count} 个分块的统计信息合并后进行单次LLM调用")
-                    
-                    all_error_entries = []
-                    all_chunk_statistics = []
-                    
-                    for entries, cid, end_line in all_chunks:
-                        error_entries = [
-                            e.to_dict() for e in entries
-                            if e.level == LogLevel.ERROR or e.level == LogLevel.FATAL
-                        ]
-                        all_error_entries.extend(error_entries)
-                        
-                        statistics = self.parser.get_error_statistics(entries)
-                        statistics['chunk_id'] = cid
-                        all_chunk_statistics.append(statistics)
-                    
-                    logger.info(f"[Process File] 合并后总错误条目数: {len(all_error_entries)}")
-                    logger.info(f"[Process File] 合并后统计信息数: {len(all_chunk_statistics)}")
-                    
-                    merged_result = await self.llm_client.analyze_merged_chunks(
-                        all_error_entries=all_error_entries,
-                        all_statistics=all_chunk_statistics,
-                        total_chunks=total_chunks_count
-                    )
-                    
-                    merged_result.chunk_id = 0
-                    
-                    for entries, cid, end_line in all_chunks:
-                        chunk_results[cid] = (merged_result, end_line)
-                else:
-                    logger.info(f"[Process File] 使用规则模式处理 {total_chunks_count} 个分块")
-                    for entries, cid, end_line in all_chunks:
-                        chunk_result = await self._process_chunk_with_rules(entries, cid)
-                        chunk_results[cid] = (chunk_result, end_line)
-            
-            elif self.enable_parallel_processing and total_chunks_count > 1:
-                if self.use_llm and self.llm_client:
-                    logger.info(f"[Process File] 使用并行处理模式，{self.parallel_workers} 个并发连接")
-                    
-                    chunks_data = []
-                    for entries, cid, end_line in all_chunks:
-                        error_entries = [
-                            e.to_dict() for e in entries
-                            if e.level == LogLevel.ERROR or e.level == LogLevel.FATAL
-                        ]
-                        statistics = self.parser.get_error_statistics(entries)
-                        chunks_data.append((cid, error_entries, statistics))
-                    
-                    analysis_results = await self.llm_client.batch_analyze(
-                        chunks_data=chunks_data,
-                        max_concurrent=self.parallel_workers
-                    )
-                    
-                    for i, (entries, cid, end_line) in enumerate(all_chunks):
-                        chunk_results[cid] = (analysis_results[i], end_line)
-                else:
-                    logger.info(f"[Process File] 使用并行处理模式（规则模式），{self.parallel_workers} 个并发连接")
-                    import asyncio
-                    semaphore = asyncio.Semaphore(self.parallel_workers)
-                    
-                    async def process_with_rules(entries, cid, end_line):
-                        async with semaphore:
-                            result = await self._process_chunk_with_rules(entries, cid)
-                            return (cid, result, end_line)
-                    
-                    tasks = [
-                        process_with_rules(entries, cid, end_line) 
-                        for entries, cid, end_line in all_chunks
-                    ]
-                    
-                    results = await asyncio.gather(*tasks)
-                    for cid, result, end_line in results:
-                        chunk_results[cid] = (result, end_line)
+            # === 统一路径：任何内存状态下，都使用第一遍扫描聚合的样本 + 统计信息，
+            #     只调用一次 LLM（analyze_merged_chunks），不再走逐chunk调用 ===
+            if self.use_llm and self.llm_client:
+                logger.info(f"[Process File] 使用合并分析策略：基于第一遍扫描聚合结果，只调用一次 LLM")
+                logger.info(f"[Process File] 合并分析 - 总块数: {total_chunks_count}")
+                logger.info(f"[Process File] 合并分析 - 错误条目: {len(sample_data['error_entries'])}")
+                logger.info(f"[Process File] 合并分析 - 警告条目: {len(sample_data['warn_entries'])}")
+                logger.info(f"[Process File] 合并分析 - INFO条目: {len(sample_data['info_entries'])}")
+                logger.info(f"[Process File] 合并分析 - 统计信息数: {len(all_chunk_statistics)}")
+
+                merged_result = await self.llm_client.analyze_merged_chunks(
+                    all_error_entries=sample_data['error_entries'],
+                    all_statistics=all_chunk_statistics,
+                    total_chunks=total_chunks_count,
+                    all_warn_entries=sample_data['warn_entries'],
+                    all_info_entries=sample_data['info_entries'],
+                    content_callback=content_callback
+                )
+
+                merged_result.chunk_id = 0
+
+                for cid, end_line, _ in all_chunks_info:
+                    chunk_results[cid] = (merged_result, end_line)
             else:
-                chunk_id = start_chunk_id
-                for entries, cid, end_line in all_chunks:
+                logger.info(f"[Process File] 使用规则模式处理 {total_chunks_count} 个分块")
+                for entries, cid, end_line in self.parser.parse_file_stream_mmap(file_path):
                     if cid < start_chunk_id:
                         continue
-
-                    logger.info(f"[Process File] ========== 处理 Chunk #{cid} ==========")
-                    logger.info(f"[Process File] 解析得到 {len(entries)} 条日志条目")
-
-                    chunk_result = await self.process_chunk_async(entries, chunk_id)
+                    ensure_memory_safety()
+                    chunk_result = await self._process_chunk_with_rules(entries, cid)
                     chunk_results[cid] = (chunk_result, end_line)
-
-                    chunk_id += 1
 
             llm_time = time.time() - llm_start
             
@@ -505,7 +843,7 @@ class ChunkProcessor:
                 'parse_time': parse_time,
                 'parsing_time': parsing_time,
                 'llm_time': llm_time,
-                'chunks_per_second': len(all_chunks) / total_time if total_time > 0 else 0,
+                'chunks_per_second': total_chunks_count / total_time if total_time > 0 else 0,
                 'lines_per_second': total_lines / total_time if total_time > 0 else 0
             }
 
@@ -543,14 +881,11 @@ class ChunkProcessor:
             return
         
         for cid, end_line, chunk_result in self._checkpoint_batch:
-            checkpoint = self.checkpoint_manager.update_checkpoint(
-                checkpoint=checkpoint,
-                processed_lines=end_line,
-                chunk_id=cid,
-                last_chunk_line=end_line,
-                chunk_result=chunk_result.to_dict()
-            )
+            checkpoint.chunk_id = cid
+            checkpoint.last_chunk_line = end_line
+            checkpoint.processed_lines = end_line
         
+        self.checkpoint_manager.save_checkpoint(checkpoint)
         self._checkpoint_batch = []
         logger.info(f"[Checkpoint] 批量更新完成")
 
@@ -609,7 +944,102 @@ class ChunkProcessor:
     async def process_files_batch_async(
         self,
         file_paths: List[str],
-        resume: bool = True
+        resume: bool = True,
+        max_concurrent: int = 2
     ) -> List[ProcessingResult]:
-        tasks = [self.process_file_async(fp, resume) for fp in file_paths]
-        return await asyncio.gather(*tasks)
+        """并行处理多个文件，带并发控制
+        
+        优化策略：
+        1. 使用信号量限制并发数，避免内存溢出
+        2. 并行解析 + 并行LLM调用
+        3. 实时显示进度
+        """
+        from asyncio import Semaphore
+        
+        total_files = len(file_paths)
+        results = [None] * total_files  # 保持顺序
+        
+        # 并发控制信号量
+        semaphore = Semaphore(max_concurrent)
+        
+        # 进度跟踪
+        completed_count = 0
+        progress_lock = asyncio.Lock()
+        
+        async def process_single_file_with_progress(index: int, file_path: str):
+            nonlocal completed_count
+            
+            async with semaphore:
+                logger.info(f"[Parallel Process] 启动任务 {index+1}/{total_files}: {os.path.basename(file_path)}")
+                
+                try:
+                    result = await self.process_file_async(file_path, resume=resume)
+                    results[index] = result
+                    
+                    async with progress_lock:
+                        completed_count += 1
+                        logger.info(f"[Parallel Process] 任务 {completed_count}/{total_files} 完成: {os.path.basename(file_path)}")
+                        if result.status == 'completed':
+                            logger.info(f"  - 处理行数: {result.processed_lines:,} / {result.total_lines:,}")
+                            logger.info(f"  - 耗时: {result.performance_metrics.get('total_time', 0):.2f}s")
+                        else:
+                            logger.info(f"  - 状态: {result.status}")
+                            if result.error_message:
+                                logger.info(f"  - 错误: {result.error_message}")
+                    
+                    return result
+                    
+                except Exception as e:
+                    logger.error(f"[Parallel Process] 任务 {index+1} 失败: {e}")
+                    error_result = ProcessingResult(
+                        file_path=file_path,
+                        total_lines=0,
+                        processed_lines=0,
+                        total_chunks=0,
+                        completed_chunks=0,
+                        status="failed",
+                        started_at=datetime.now(),
+                        error_message=str(e)
+                    )
+                    results[index] = error_result
+                    
+                    async with progress_lock:
+                        completed_count += 1
+                    
+                    return error_result
+        
+        logger.info("=" * 80)
+        logger.info(f"[Parallel Process] 开始并行处理 {total_files} 个文件")
+        logger.info(f"  最大并发数: {max_concurrent}")
+        logger.info(f"  预计加速比: ~{min(total_files, max_concurrent)}x")
+        logger.info("=" * 80)
+        
+        start_time = time.time()
+        
+        # 创建所有任务并等待完成
+        tasks = [
+            process_single_file_with_progress(i, fp) 
+            for i, fp in enumerate(file_paths)
+        ]
+        
+        # 使用 gather 等待所有任务，但有并发控制
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        elapsed = time.time() - start_time
+        
+        # 统计结果
+        successful = sum(1 for r in results if r and r.status == 'completed')
+        failed = sum(1 for r in results if r and r.status == 'failed')
+        
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info(f"[Parallel Process] 批量处理完成!")
+        logger.info(f"  总文件数: {total_files}")
+        logger.info(f"  成功: {successful}")
+        logger.info(f"  失败: {failed}")
+        logger.info(f"  总耗时: {elapsed:.2f}s")
+        logger.info(f"  串行预计耗时: ~{sum(r.performance_metrics.get('total_time', 0) for r in results if r):.2f}s")
+        logger.info(f"  加速比: ~{(sum(r.performance_metrics.get('total_time', 0) for r in results if r) / elapsed):.2f}x")
+        logger.info("=" * 80)
+        
+        return results

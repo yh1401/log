@@ -7,7 +7,7 @@ import logging
 import httpx
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 from enum import Enum
 
 from ..config.settings import LLMConfig
@@ -324,19 +324,151 @@ class LLMClient:
             error=f"Max retries exceeded. Last error: {last_error}"
         )
 
+    async def chat_streaming(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 2048,
+        content_callback: Optional[Callable[[str], None]] = None
+    ) -> LLMResponse:
+        payload = self._build_payload(messages, model, temperature, max_tokens)
+        payload["stream"] = True
+        start_time = time.time()
+        client = await self._get_client()
+        content = ""
+        total_chunks = 0
+
+        logger.info("-" * 80)
+        logger.info("[LLM Streaming] 准备发送流式请求")
+        logger.info(f"  URL: {self.config.api_url}")
+        logger.info(f"  Model: {payload.get('model')}")
+        logger.info(f"  Temperature: {payload.get('temperature')}")
+        logger.info(f"  Max Tokens: {payload.get('max_tokens')}")
+        logger.info("-" * 80)
+
+        try:
+            async with client.stream("POST", self.config.api_url, json=payload) as response:
+                latency_ms = (time.time() - start_time) * 1000
+                logger.info(f"[LLM Streaming] 连接建立，延迟: {latency_ms:.2f}ms")
+
+                async for chunk in response.aiter_lines():
+                    if not chunk.strip():
+                        continue
+                    if chunk.startswith("data: "):
+                        chunk = chunk[6:]
+                    if chunk == "[DONE]":
+                        break
+
+                    try:
+                        data = json.loads(chunk)
+                        choices = data.get("choices", [])
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {}).get("content", "")
+                        if delta:
+                            content += delta
+                            total_chunks += 1
+                            logger.info(f"[LLM Streaming] 收到片段 #{total_chunks}, 长度: {len(delta)} 字符, 累计: {len(content)} 字符, 内容: {delta[:100]}{'...' if len(delta) > 100 else ''}")
+                            
+                            if content_callback:
+                                await content_callback(delta)
+                    except json.JSONDecodeError:
+                        continue
+
+            latency_ms = (time.time() - start_time) * 1000
+            logger.info("-" * 80)
+            logger.info(f"[LLM Streaming] 流式接收完成")
+            logger.info(f"  总片段数: {total_chunks}")
+            logger.info(f"  总内容长度: {len(content)} 字符")
+            logger.info(f"  总延迟: {latency_ms:.2f}ms")
+            logger.info("-" * 80)
+
+            return LLMResponse(
+                content=content,
+                model=payload.get('model', self.config.model_name),
+                provider=self.provider.value,
+                latency_ms=latency_ms
+            )
+
+        except httpx.HTTPStatusError as e:
+            latency_ms = (time.time() - start_time) * 1000
+            error_msg = f"HTTP {e.response.status_code}: {e.response.text[:500]}"
+            logger.error(f"[LLM Streaming Error] HTTP Status Error: {error_msg}")
+            return LLMResponse(
+                content="",
+                model=payload.get('model', self.config.model_name),
+                provider=self.provider.value,
+                latency_ms=latency_ms,
+                error=error_msg
+            )
+        except Exception as e:
+            latency_ms = (time.time() - start_time) * 1000
+            error_msg = str(e)
+            logger.error(f"[LLM Streaming Error] Exception: {error_msg}")
+            return LLMResponse(
+                content="",
+                model=payload.get('model', self.config.model_name),
+                provider=self.provider.value,
+                latency_ms=latency_ms,
+                error=error_msg
+            )
+
     def build_log_analysis_prompt(
         self,
         error_entries: List[Dict[str, Any]],
         statistics: Dict[str, Any],
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        warn_entries: Optional[List[Dict[str, Any]]] = None,
+        info_entries: Optional[List[Dict[str, Any]]] = None
     ) -> List[Dict[str, str]]:
         logger.info("=" * 80)
         logger.info("[Prompt Building] 构建日志分析提示词")
         logger.info(f"  Error Entries Count: {len(error_entries)}")
+        logger.info(f"  Warn Entries Count: {len(warn_entries or [])}")
+        logger.info(f"  Info Entries Count: {len(info_entries or [])}")
         logger.info(f"  Statistics Keys: {list(statistics.keys())}")
         logger.info(f"  Context Provided: {'Yes' if context else 'No'}")
 
-        system_prompt = """你是一个资深的专业日志分析工程师和故障排查专家，擅长分析应用程序错误日志、定位故障根因、构建证据链，并提供可落地的处置和整改方案。
+        has_errors = len(error_entries) > 0
+        has_warnings = len(warn_entries or []) > 0
+        has_info = len(info_entries or []) > 0
+
+        if has_errors:
+            prompt_type = "error"
+            system_prompt = self._build_error_analysis_system_prompt()
+        elif has_warnings:
+            prompt_type = "warning"
+            system_prompt = self._build_warning_analysis_system_prompt()
+        else:
+            prompt_type = "info"
+            system_prompt = self._build_info_summary_system_prompt()
+
+        user_content = self._build_user_content(
+            prompt_type, error_entries, warn_entries, info_entries, statistics, context
+        )
+
+        logger.info("=" * 80)
+        logger.info(f"[Prompt Building] Prompt Type: {prompt_type.upper()}")
+        logger.info("[Prompt Building] System Prompt 内容:")
+        logger.info("-" * 80)
+        logger.info(system_prompt)
+        logger.info("=" * 80)
+        logger.info("[Prompt Building] User Prompt 内容 (发送给 LLM 的用户消息):")
+        logger.info("-" * 80)
+        logger.info(user_content)
+        logger.info("=" * 80)
+        logger.info(f"  System Prompt Length: {len(system_prompt)} chars")
+        logger.info(f"  User Content Length: {len(user_content)} chars")
+        logger.info("=" * 80)
+
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ]
+
+    def _build_error_analysis_system_prompt(self) -> str:
+        return """你是一个资深的专业日志分析工程师和故障排查专家，擅长分析应用程序错误日志、定位故障根因、构建证据链，并提供可落地的处置和整改方案。
 
 你的任务是对提供的错误日志数据进行深度分析，生成一份结构化的故障分析总结报告。报告应当专业、准确、可操作。
 
@@ -609,57 +741,292 @@ class LLMClient:
 - 确保输出的 JSON 格式有效，便于程序解析
 - 中文输出，术语准确，表达专业"""
 
-        error_samples = []
-        for entry in error_entries[:20]:
-            error_samples.append({
-                'timestamp': entry.get('timestamp', ''),
-                'error_type': entry.get('error_type', 'Unknown'),
-                'message': entry.get('message', '')[:200],
-                'class': entry.get('class_name', '')
-            })
+    def _build_warning_analysis_system_prompt(self) -> str:
+        return """你是一个资深的专业日志分析工程师，擅长分析应用程序的警告日志（WARN级别）和潜在问题，识别可能引发故障的隐患，并提供预防性建议。
 
-        user_content = f"错误日志统计:\n{json.dumps(statistics, indent=2, ensure_ascii=False)}\n\n"
-        user_content += f"错误样本:\n{json.dumps(error_samples, indent=2, ensure_ascii=False)}\n\n"
+你的任务是对提供的警告日志数据进行深度分析，生成一份结构化的警告分析总结报告。报告应当专业、准确、可操作。
+
+## 报告结构要求
+
+生成的报告必须包含以下核心环节：
+
+### 一、警告概览（Warning Overview）
+- **警告总数**：统计范围内的警告条目总数
+- **时间范围**：警告发生的时间跨度
+- **警告级别分布**：不同严重程度警告的比例
+- **关键发现**：最值得关注的警告模式
+
+### 二、警告模式分析（Warning Pattern Analysis）
+识别警告日志中的模式和趋势：
+- **高频警告类型**：出现次数最多的警告类型
+- **周期性模式**：是否存在周期性出现的警告
+- **关联性分析**：不同警告之间是否存在关联
+- **潜在风险评估**：各警告可能导致的潜在问题
+
+### 三、风险评估（Risk Assessment）
+对警告进行风险等级评估：
+- **高风险**：可能导致服务中断或数据丢失的警告
+- **中风险**：可能影响性能或功能的警告
+- **低风险**：一般提示性信息
+
+### 四、预防性建议（Preventive Suggestions）
+针对识别出的警告模式，提供预防性建议：
+- **立即关注**：需要马上处理的问题
+- **短期优化**：近期可以改进的项
+- **长期规划**：需要架构层面调整的建议
+
+### 五、日志统计摘要（Log Statistics Summary）
+提供全面的日志统计信息：
+- **各日志级别分布**：ERROR/WARN/INFO的比例
+- **时间分布**：日志量随时间的变化趋势
+- **模块分布**：各业务模块的日志量和警告比例
+
+## 输出格式要求
+
+**必须使用有效的 JSON 格式输出**，包含以下字段：
+
+```json
+{
+  "summary": "警告分析总体摘要（150字以内）",
+  
+  "overview": {
+    "total_warnings": 1234,
+    "time_range": "2026-06-21 20:00:00 - 2026-06-21 21:00:00",
+    "key_findings": ["发现的关键问题"]
+  },
+  
+  "warning_patterns": [
+    {
+      "pattern_type": "警告类型",
+      "count": 123,
+      "description": "警告描述",
+      "sample_log": "示例日志",
+      "risk_level": "high | medium | low"
+    }
+  ],
+  
+  "risk_assessment": {
+    "high_risk_count": 10,
+    "medium_risk_count": 50,
+    "low_risk_count": 100,
+    "high_risk_details": ["高风险警告详情"]
+  },
+  
+  "preventive_suggestions": [
+    {
+      "priority": "high | medium | low",
+      "category": "代码修复 | 配置调整 | 监控增强 | 架构优化",
+      "suggestion": "具体建议内容",
+      "expected_effect": "预期效果"
+    }
+  ],
+  
+  "log_statistics": {
+    "total_entries": 10000,
+    "level_distribution": {"ERROR": 0, "WARN": 1234, "INFO": 8766},
+    "time_trends": ["时间趋势描述"]
+  }
+}
+```
+
+## 分析原则
+
+1. **风险导向**：重点关注可能引发严重问题的警告
+2. **模式识别**：识别重复出现的警告模式
+3. **可操作性**：所有建议必须具体、可落地
+4. **优先级明确**：区分紧急、重要、长期的改进项
+
+## 注意事项
+
+- 如果日志数据不足，明确说明限制和需要进一步信息
+- 确保输出的 JSON 格式有效，便于程序解析
+- 中文输出，术语准确，表达专业"""
+
+    def _build_info_summary_system_prompt(self) -> str:
+        return """你是一个资深的专业日志分析工程师，擅长分析应用程序的INFO级别日志，提取关键业务指标、行为模式和系统状态信息，生成全面的日志摘要报告。
+
+你的任务是对提供的INFO级别日志数据进行深度分析和摘要，生成一份结构化的日志分析总结报告。报告应当专业、准确、有价值。
+
+## 报告结构要求
+
+生成的报告必须包含以下核心环节：
+
+### 一、日志概览（Log Overview）
+- **日志总数**：分析范围内的日志条目总数
+- **时间范围**：日志覆盖的时间跨度
+- **日志格式识别**：识别日志的格式类型（如：追踪日志、统计日志、流日志等）
+- **数据来源**：日志对应的服务或模块
+
+### 二、关键指标提取（Key Metrics Extraction）
+从日志中提取业务和系统指标：
+- **请求/操作数量**：统计各类操作的总数
+- **成功率/失败率**：分析操作的成功和失败比例
+- **性能指标**：响应时间、处理时长等（如果日志中包含）
+- **关键业务数据**：如设备ID、流ID、用户ID等的分布
+
+### 三、行为模式分析（Behavior Pattern Analysis）
+分析系统和业务的行为模式：
+- **操作类型分布**：各类操作的占比
+- **时间分布**：日志量和操作频率随时间的变化趋势
+- **热点识别**：高频操作、热门资源、活跃设备等
+- **异常模式**：与正常模式不符的异常行为
+
+### 四、系统状态评估（System Status Assessment）
+基于日志信息评估系统健康状态：
+- **整体状态**：正常/异常/需关注
+- **潜在问题**：从INFO日志中发现的潜在问题线索
+- **性能趋势**：系统性能的变化趋势
+
+### 五、数据洞察与建议（Data Insights & Suggestions）
+基于分析结果提供数据洞察和优化建议：
+- **业务洞察**：从日志数据中发现的业务模式或趋势
+- **优化建议**：基于日志分析提出的系统优化建议
+- **监控建议**：建议新增或调整的监控指标
+
+## 输出格式要求
+
+**必须使用有效的 JSON 格式输出**，包含以下字段：
+
+```json
+{
+  "summary": "日志分析总体摘要（150字以内）",
+  
+  "overview": {
+    "total_entries": 100000,
+    "time_range": "2026-06-21 20:00:00 - 2026-06-21 21:00:00",
+    "log_format": "trace | statistics | stream | other",
+    "data_source": "服务/模块名称"
+  },
+  
+  "key_metrics": {
+    "request_count": 10000,
+    "success_rate": 99.5,
+    "error_rate": 0.5,
+    "operations": {
+      "operation_type_1": 5000,
+      "operation_type_2": 3000
+    }
+  },
+  
+  "behavior_patterns": [
+    {
+      "pattern_type": "操作类型 | 时间分布 | 热点识别",
+      "description": "模式描述",
+      "data": {"key": "value"},
+      "insight": "从数据中得出的洞察"
+    }
+  ],
+  
+  "system_status": {
+    "overall_status": "normal | warning | critical",
+    "potential_issues": ["潜在问题列表"],
+    "performance_trends": ["性能趋势描述"]
+  },
+  
+  "insights": [
+    {
+      "category": "业务洞察 | 优化建议 | 监控建议",
+      "content": "具体内容",
+      "priority": "high | medium | low"
+    }
+  ]
+}
+```
+
+## 分析原则
+
+1. **数据驱动**：所有结论必须基于日志数据
+2. **价值导向**：重点关注有业务价值的指标和模式
+3. **全面覆盖**：既要关注正常行为，也要识别异常模式
+4. **可操作性**：建议必须具体、可落地
+
+## 注意事项
+
+- 如果日志数据不足，明确说明限制和需要进一步信息
+- 确保输出的 JSON 格式有效，便于程序解析
+- 中文输出，术语准确，表达专业"""
+
+    def _build_user_content(
+        self,
+        prompt_type: str,
+        error_entries: List[Dict[str, Any]],
+        warn_entries: Optional[List[Dict[str, Any]]],
+        info_entries: Optional[List[Dict[str, Any]]],
+        statistics: Dict[str, Any],
+        context: Optional[str]
+    ) -> str:
+        user_content = ""
+
+        if prompt_type == "error":
+            error_samples = []
+            for entry in error_entries[:20]:
+                error_samples.append({
+                    'timestamp': entry.get('timestamp', ''),
+                    'error_type': entry.get('error_type', 'Unknown'),
+                    'message': entry.get('message', '')[:200],
+                    'class': entry.get('class_name', '')
+                })
+            user_content = f"错误日志统计:\n{json.dumps(statistics, indent=2, ensure_ascii=False)}\n\n"
+            user_content += f"错误样本:\n{json.dumps(error_samples, indent=2, ensure_ascii=False)}\n\n"
+
+        elif prompt_type == "warning":
+            # 从不同类中抽样，确保样本多样性
+            warn_samples = self._sample_diverse_entries(warn_entries or [], 20)
+            user_content = f"警告日志统计:\n{json.dumps(statistics, indent=2, ensure_ascii=False)}\n\n"
+            user_content += f"警告样本（从{len(set(w.get('class_name', '') for w in warn_samples))}个不同类中抽取）:\n{json.dumps(warn_samples, indent=2, ensure_ascii=False)}\n\n"
+
+            # 如果还有 INFO 样本，加入用于补充业务上下文
+            if info_entries and len(info_entries) > 0:
+                info_samples_for_warning = []
+                for entry in info_entries[:30]:
+                    info_samples_for_warning.append({
+                        'timestamp': entry.get('timestamp', ''),
+                        'level': entry.get('level', 'INFO'),
+                        'message': entry.get('message', '')[:200],
+                        'class': entry.get('class_name', ''),
+                        'method': entry.get('method_name', '')
+                    })
+                user_content += f"INFO日志样本（用于补充业务上下文和指标分析）:\n{json.dumps(info_samples_for_warning, indent=2, ensure_ascii=False)}\n\n"
+                user_content += "请结合INFO日志中的业务操作类型（如getAlertPushUrl、getStreamUrl、getDeviceInfo等）、接口调用参数分布和时序特征，分析业务流量的整体状况、热点操作和高频设备，评估警告对业务的影响范围。\n\n"
+
+        else:
+            info_samples = []
+            for entry in (info_entries or [])[:20]:
+                info_samples.append({
+                    'timestamp': entry.get('timestamp', ''),
+                    'level': entry.get('level', 'INFO'),
+                    'message': entry.get('message', '')[:200],
+                    'class': entry.get('class_name', ''),
+                    'method': entry.get('method_name', '')
+                })
+            user_content = f"日志统计信息:\n{json.dumps(statistics, indent=2, ensure_ascii=False)}\n\n"
+            user_content += f"INFO日志样本:\n{json.dumps(info_samples, indent=2, ensure_ascii=False)}\n\n"
 
         if context:
             user_content += f"上下文信息:\n{context}\n\n"
 
-        user_content += "\n请分析以上错误日志并生成 JSON 格式的报告。"
-
-        logger.info("=" * 80)
-        logger.info("[Prompt Building] System Prompt 内容:")
-        logger.info("-" * 80)
-        logger.info(system_prompt)
-        logger.info("=" * 80)
-        logger.info("[Prompt Building] User Prompt 内容 (发送给 LLM 的用户消息):")
-        logger.info("-" * 80)
-        logger.info(user_content)
-        logger.info("=" * 80)
-        logger.info(f"  System Prompt Length: {len(system_prompt)} chars")
-        logger.info(f"  User Content Length: {len(user_content)} chars")
-        logger.info(f"  错误样本数量：{len(error_samples)} 条")
-        logger.info("=" * 80)
-
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
-        ]
+        user_content += "\n请分析以上日志数据并生成 JSON 格式的报告。"
+        return user_content
 
     async def analyze_log_chunk(
         self,
         error_entries: List[Dict[str, Any]],
         statistics: Dict[str, Any],
         chunk_id: int,
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        warn_entries: Optional[List[Dict[str, Any]]] = None,
+        info_entries: Optional[List[Dict[str, Any]]] = None
     ) -> AnalysisResult:
         logger.info("=" * 80)
         logger.info(f"[Chunk Analysis] 开始分析 Chunk #{chunk_id}")
         logger.info(f"  Error Entries: {len(error_entries)}")
+        logger.info(f"  Warn Entries: {len(warn_entries or [])}")
+        logger.info(f"  Info Entries: {len(info_entries or [])}")
         logger.info(f"  Statistics: {json.dumps(statistics, indent=2, ensure_ascii=False)}")
         logger.info(f"  Context Provided: {'Yes' if context else 'No'}")
         logger.info("=" * 80)
 
-        messages = self.build_log_analysis_prompt(error_entries, statistics, context)
+        messages = self.build_log_analysis_prompt(error_entries, statistics, context, warn_entries, info_entries)
 
         logger.info(f"[Chunk #{chunk_id}] 准备发送 {len(messages)} 条消息到 LLM")
 
@@ -745,13 +1112,44 @@ class LLMClient:
 
         return result
 
+    def _sample_diverse_entries(
+        self,
+        entries: List[Dict[str, Any]],
+        max_samples: int = 20
+    ) -> List[Dict[str, Any]]:
+        """从不同类中抽样，确保样本多样性"""
+        if not entries:
+            return []
+        grouped = {}
+        for entry in entries:
+            key = entry.get('class_name', entry.get('error_type', 'Unknown'))
+            if key not in grouped:
+                grouped[key] = []
+            if len(grouped[key]) < 3:  # 每类最多保留3条
+                grouped[key].append({
+                    'timestamp': entry.get('timestamp', ''),
+                    'level': entry.get('level', ''),
+                    'class_name': entry.get('class_name', ''),
+                    'error_type': entry.get('error_type', ''),
+                    'message': entry.get('message', '')[:200]
+                })
+        samples = []
+        for group in grouped.values():
+            samples.extend(group)
+            if len(samples) >= max_samples:
+                break
+        return samples[:max_samples]
+
     def _aggregate_errors(
         self,
         all_error_entries: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    ) -> tuple:
         """
         智能错误聚合函数：将大量错误条目聚合为结构化的摘要数据
         保留关键信息的同时显著减少字符数量
+
+        Returns:
+            tuple: (summary_dict, original_chars, compressed_chars, compression_ratio)
         """
         original_chars = len(json.dumps(all_error_entries, ensure_ascii=False))
         
@@ -853,11 +1251,148 @@ class LLMClient:
         
         return summary, original_chars, compressed_chars, compression_ratio
 
+    def _aggregate_warnings(
+        self,
+        all_warn_entries: List[Dict[str, Any]]
+    ) -> tuple:
+        """
+        智能警告聚合函数：将大量警告条目聚合为结构化的摘要数据
+        保留关键信息的同时显著减少字符数量
+
+        Returns:
+            tuple: (summary_dict, original_chars, compressed_chars, compression_ratio)
+        """
+        original_chars = len(json.dumps(all_warn_entries, ensure_ascii=False))
+        
+        # 1. 按类和方法分组
+        warnings_by_class = {}
+        warnings_by_message_pattern = {}
+        timestamps = []
+        
+        for entry in all_warn_entries:
+            timestamp = entry.get('timestamp', '')
+            if timestamp:
+                timestamps.append(timestamp)
+            
+            class_name = entry.get('class_name', 'Unknown')
+            message = entry.get('message', '')
+            
+            # 提取消息模式（前100字符作为模式）
+            message_pattern = message[:100] if message else 'empty'
+            
+            # 按类统计
+            if class_name not in warnings_by_class:
+                warnings_by_class[class_name] = {
+                    'count': 0,
+                    'messages': set(),
+                    'sample_timestamps': []
+                }
+            
+            warnings_by_class[class_name]['count'] += 1
+            if message:
+                warnings_by_class[class_name]['messages'].add(message[:150])
+            if len(warnings_by_class[class_name]['sample_timestamps']) < 5:
+                warnings_by_class[class_name]['sample_timestamps'].append(timestamp)
+            
+            # 按消息模式统计
+            if message_pattern not in warnings_by_message_pattern:
+                warnings_by_message_pattern[message_pattern] = {
+                    'count': 0,
+                    'classes': set(),
+                    'sample_messages': []
+                }
+            
+            warnings_by_message_pattern[message_pattern]['count'] += 1
+            warnings_by_message_pattern[message_pattern]['classes'].add(class_name)
+            if len(warnings_by_message_pattern[message_pattern]['sample_messages']) < 2:
+                warnings_by_message_pattern[message_pattern]['sample_messages'].append(message[:200])
+        
+        # 2. 为每个类生成结构化摘要
+        aggregated_by_class = []
+        max_classes = 20  # 最多保留20个类
+        
+        # 按出现频率排序
+        sorted_classes = sorted(
+            warnings_by_class.items(),
+            key=lambda x: x[1]['count'],
+            reverse=True
+        )[:max_classes]
+        
+        for class_name, data in sorted_classes:
+            aggregated_by_class.append({
+                'class': class_name,
+                'count': data['count'],
+                'percentage': f"{(data['count'] / len(all_warn_entries) * 100):.1f}%",
+                'message_patterns': list(data['messages'])[:5],
+                'first_occurrence': data['sample_timestamps'][0] if data['sample_timestamps'] else None,
+                'last_occurrence': data['sample_timestamps'][-1] if data['sample_timestamps'] else None
+            })
+        
+        # 3. 为每个消息模式生成结构化摘要
+        aggregated_by_pattern = []
+        max_patterns = 10  # 最多保留10种消息模式
+        
+        sorted_patterns = sorted(
+            warnings_by_message_pattern.items(),
+            key=lambda x: x[1]['count'],
+            reverse=True
+        )[:max_patterns]
+        
+        for pattern, data in sorted_patterns:
+            aggregated_by_pattern.append({
+                'pattern': pattern,
+                'count': data['count'],
+                'percentage': f"{(data['count'] / len(all_warn_entries) * 100):.1f}%",
+                'affected_classes': list(data['classes'])[:5],
+                'sample_message': data['sample_messages'][0] if data['sample_messages'] else ''
+            })
+        
+        # 4. 计算整体时间范围
+        overall_time_range = None
+        if timestamps:
+            overall_time_range = {
+                'start': min(timestamps),
+                'end': max(timestamps)
+            }
+        
+        # 5. 生成聚合摘要
+        summary = {
+            'total_warnings': len(all_warn_entries),
+            'unique_classes': len(warnings_by_class),
+            'unique_patterns': len(warnings_by_message_pattern),
+            'time_range': overall_time_range,
+            'top_classes': aggregated_by_class,
+            'top_patterns': aggregated_by_pattern,
+            'high_frequency_warnings': [
+                {
+                    'class': class_name,
+                    'count': data['count'],
+                    'risk_level': 'high' if data['count'] > 10000 else 'medium' if data['count'] > 5000 else 'low'
+                }
+                for class_name, data in sorted_classes[:5]
+            ]
+        }
+        
+        compressed_chars = len(json.dumps(summary, ensure_ascii=False))
+        compression_ratio = ((original_chars - compressed_chars) / original_chars) * 100 if original_chars > 0 else 0
+        
+        logger.info(f"[Warning Aggregation] 智能聚合完成")
+        logger.info(f"  原始条目数: {len(all_warn_entries)}")
+        logger.info(f"  聚合后类数: {len(aggregated_by_class)}")
+        logger.info(f"  聚合后模式数: {len(aggregated_by_pattern)}")
+        logger.info(f"  原始字符数: {original_chars:,}")
+        logger.info(f"  压缩后字符数: {compressed_chars:,}")
+        logger.info(f"  压缩率: {compression_ratio:.1f}%")
+        
+        return summary, original_chars, compressed_chars, compression_ratio
+
     def build_merged_analysis_prompt(
         self,
         all_error_entries: List[Dict[str, Any]],
         all_statistics: List[Dict[str, Any]],
-        total_chunks: int
+        total_chunks: int,
+        all_warn_entries: Optional[List[Dict[str, Any]]] = None,
+        all_info_entries: Optional[List[Dict[str, Any]]] = None
     ) -> List[Dict[str, str]]:
         logger.info("=" * 80)
         logger.info("[Prompt Building] 构建合并日志分析提示词")
@@ -918,55 +1453,111 @@ class LLMClient:
         # 使用智能错误聚合
         error_summary, original_chars, compressed_chars, compression_ratio = self._aggregate_errors(all_error_entries)
         
+        # 使用智能警告聚合
+        warning_summary = None
+        warn_original_chars = 0
+        warn_compressed_chars = 0
+        warn_compression_ratio = 0.0
+        if all_warn_entries and len(all_warn_entries) > 0:
+            warning_summary, warn_original_chars, warn_compressed_chars, warn_compression_ratio = self._aggregate_warnings(all_warn_entries)
+        
         # 记录优化效果到统计信息中
         merged_statistics['compression_stats'] = {
-            'original_chars': original_chars,
-            'compressed_chars': compressed_chars,
-            'compression_ratio': f"{compression_ratio:.1f}%"
+            'error': {
+                'original_chars': original_chars,
+                'compressed_chars': compressed_chars,
+                'compression_ratio': f"{compression_ratio:.1f}%"
+            },
+            'warning': {
+                'original_chars': warn_original_chars,
+                'compressed_chars': warn_compressed_chars,
+                'compression_ratio': f"{warn_compression_ratio:.1f}%"
+            }
         }
 
-        context = (
-            f"这是一次合并分析，共合并 {total_chunks} 个日志分块。"
-            "请把这些分块视为同一个日志文件的连续上下文，生成一份跨所有分块的综合故障分析报告。\n\n"
-            f"智能聚合错误摘要:\n{json.dumps(error_summary, indent=2, ensure_ascii=False)}\n\n"
-            "分析时请优先使用合并统计信息和智能聚合错误摘要来构建故障时间线、根因推断、因果链、"
-            "证据链、处置动作和整改建议。"
-        )
+        # 构建上下文信息，根据日志类型定制
+        has_errors = len(all_error_entries) > 0
+        has_warnings = all_warn_entries and len(all_warn_entries) > 0
+        
+        context_parts = [
+            f"这是一次合并分析，共合并 {total_chunks} 个日志分块。",
+            "请把这些分块视为同一个日志文件的连续上下文，生成一份跨所有分块的综合故障分析报告。\n"
+        ]
+        
+        if has_errors and not has_warnings:
+            context_parts.append(f"智能聚合错误摘要:\n{json.dumps(error_summary, indent=2, ensure_ascii=False)}\n\n")
+            context_parts.append("分析时请优先使用合并统计信息和智能聚合错误摘要来构建故障时间线、根因推断、因果链、证据链、处置动作和整改建议。")
+        elif has_warnings and not has_errors:
+            context_parts.append(f"智能聚合警告摘要:\n{json.dumps(warning_summary, indent=2, ensure_ascii=False)}\n\n")
+            context_parts.append("关键业务模块分布（按日志量排序）:\n")
+            context_parts.append(json.dumps(merged_statistics['top_classes'], indent=2, ensure_ascii=False))
+            context_parts.append(
+                "\n\n请从以下五个维度进行深度分析，生成详细的分析报告：\n"
+                "1. **业务维度分析**：基于高频类名（ShuntResourceInvoker、StreamBizServiceImpl等）推断业务拓扑和服务依赖关系，分析各模块的调用频率、操作类型（读/写/查询/推送）和业务语义。\n"
+                "2. **日志量趋势与异常识别**：根据按时间维度的日志量分布，分析是否存在流量突增、日志密度变化或异常低峰期，识别潜在的服务容量问题。\n"
+                "3. **业务指标提取**：从INFO日志中提取关键业务指标（如推流请求量、设备连接数、接口响应情况、操作成功率等），评估系统总体健康度。\n"
+                "4. **警告根因关联分析**：将警告日志与同一时间窗口的INFO日志进行关联分析，识别警告是否与特定业务操作（如缓存缺失对应推流请求、API参数错误对应业务调用链）相关。\n"
+                "5. **架构与容量评估**：基于模块调用分布和日志量级，评估系统是否存在热点模块、单点瓶颈或资源争用问题。\n\n"
+                "请生成包含以上维度的完整分析报告，确保『概览』、『模式分析』、『风险评估』、『日志统计』各部分有实质性内容输出。"
+            )
+        else:
+            # 既有错误也有警告
+            context_parts.append(f"智能聚合错误摘要:\n{json.dumps(error_summary, indent=2, ensure_ascii=False)}\n\n")
+            if warning_summary:
+                context_parts.append(f"智能聚合警告摘要:\n{json.dumps(warning_summary, indent=2, ensure_ascii=False)}\n\n")
+            context_parts.append("分析时请优先使用合并统计信息和聚合摘要来构建故障时间线、根因推断、因果链、证据链、处置动作和整改建议。")
+        
+        context = "".join(context_parts)
 
         logger.info("=" * 80)
         logger.info("[Prompt Building] 合并分析复用标准日志分析提示词")
-        logger.info(f"  压缩前字符数: {original_chars:,}")
-        logger.info(f"  压缩后字符数: {compressed_chars:,}")
-        logger.info(f"  压缩率: {compression_ratio:.1f}%")
+        logger.info(f"  Error - 压缩前: {original_chars:,}, 压缩后: {compressed_chars:,}, 压缩率: {compression_ratio:.1f}%")
+        logger.info(f"  Warning - 压缩前: {warn_original_chars:,}, 压缩后: {warn_compressed_chars:,}, 压缩率: {warn_compression_ratio:.1f}%")
         logger.info("=" * 80)
 
         return self.build_log_analysis_prompt(
             error_entries=all_error_entries,
             statistics=merged_statistics,
-            context=context
+            context=context,
+            warn_entries=all_warn_entries,
+            info_entries=all_info_entries
         )
 
     async def analyze_merged_chunks(
         self,
         all_error_entries: List[Dict[str, Any]],
         all_statistics: List[Dict[str, Any]],
-        total_chunks: int
+        total_chunks: int,
+        all_warn_entries: Optional[List[Dict[str, Any]]] = None,
+        all_info_entries: Optional[List[Dict[str, Any]]] = None,
+        content_callback: Optional[Callable[[str], None]] = None
     ) -> AnalysisResult:
         logger.info("=" * 80)
         logger.info(f"[Merged Analysis] 开始合并分析 {total_chunks} 个分块")
         logger.info(f"  Total Error Entries: {len(all_error_entries)}")
+        logger.info(f"  Total Warn Entries: {len(all_warn_entries or [])}")
+        logger.info(f"  Total Info Entries: {len(all_info_entries or [])}")
         logger.info(f"  Statistics Count: {len(all_statistics)}")
+        logger.info(f"  Streaming: {'Enabled' if content_callback else 'Disabled'}")
         logger.info("=" * 80)
 
-        messages = self.build_merged_analysis_prompt(all_error_entries, all_statistics, total_chunks)
+        messages = self.build_merged_analysis_prompt(all_error_entries, all_statistics, total_chunks, all_warn_entries, all_info_entries)
 
         logger.info(f"[Merged Analysis] 准备发送 {len(messages)} 条消息到 LLM")
 
-        response = await self.chat(
-            messages=messages,
-            temperature=0.3,
-            max_tokens=4096
-        )
+        if content_callback:
+            response = await self.chat_streaming(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=4096,
+                content_callback=content_callback
+            )
+        else:
+            response = await self.chat(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=4096
+            )
 
         result = AnalysisResult(
             chunk_id=0,
@@ -1056,9 +1647,9 @@ class LLMClient:
         logger.info(f"  Max Concurrent: {max_concurrent}")
         logger.info("=" * 80)
 
-        async def process_chunk(idx: int, chunk_id: int, error_entries: List[Dict[str, Any]], statistics: Dict[str, Any]):
+        async def process_chunk(idx: int, chunk_id: int, error_entries: List[Dict[str, Any]], statistics: Dict[str, Any], warn_entries=None, info_entries=None):
             try:
-                result = await self.analyze_log_chunk(error_entries, statistics, chunk_id)
+                result = await self.analyze_log_chunk(error_entries, statistics, chunk_id, None, warn_entries, info_entries)
                 results[idx] = result
 
                 if progress_callback:
@@ -1073,13 +1664,18 @@ class LLMClient:
 
         semaphore = asyncio.Semaphore(max_concurrent)
 
-        async def bounded_process(idx: int, chunk_id: int, error_entries: List[Dict[str, Any]], statistics: Dict[str, Any]):
+        async def bounded_process(idx: int, chunk_id: int, error_entries: List[Dict[str, Any]], statistics: Dict[str, Any], warn_entries=None, info_entries=None):
             async with semaphore:
-                await process_chunk(idx, chunk_id, error_entries, statistics)
+                await process_chunk(idx, chunk_id, error_entries, statistics, warn_entries, info_entries)
 
         tasks = []
-        for idx, (chunk_id, error_entries, statistics) in enumerate(chunks_data):
-            tasks.append(bounded_process(idx, chunk_id, error_entries, statistics))
+        for idx, chunk_data in enumerate(chunks_data):
+            if len(chunk_data) == 5:
+                chunk_id, error_entries, statistics, warn_entries, info_entries = chunk_data
+                tasks.append(bounded_process(idx, chunk_id, error_entries, statistics, warn_entries, info_entries))
+            else:
+                chunk_id, error_entries, statistics = chunk_data
+                tasks.append(bounded_process(idx, chunk_id, error_entries, statistics))
 
         await asyncio.gather(*tasks)
 

@@ -46,10 +46,10 @@ class ProcessingConfig:
 @dataclass
 class PathsConfig:
     """路径配置"""
-    error_log_dir: str = "/Users/a666/Documents/trae_projects/log/loggen/data/error"
-    output_dir: str = "/Users/a666/Documents/trae_projects/log/log_analyzer/reports"
-    checkpoint_dir: str = "/Users/a666/Documents/trae_projects/log/log_analyzer/checkpoints"
-    user_data_dir: str = "/Users/a666/Documents/trae_projects/log/log_analyzer/users"
+    error_log_dir: str = "../loggen/data/error"
+    output_dir: str = "reports"
+    checkpoint_dir: str = "checkpoints"
+    user_data_dir: str = "users"
 
 
 @dataclass
@@ -239,11 +239,24 @@ class Settings:
         
         # 路径配置
         paths_data = data.get('paths', {})
+        
+        # 获取项目根目录（config目录的父目录）
+        project_root = Path(__file__).parent.parent
+        
+        # 解析相对路径
+        def resolve_path(path_str: str, default: str) -> str:
+            path = Path(path_str)
+            if not path.is_absolute():
+                # 相对路径，相对于项目根目录
+                resolved = project_root / path
+                return str(resolved.resolve())
+            return path_str
+        
         paths_config = PathsConfig(
-            error_log_dir=paths_data.get('error_log_dir', PathsConfig.error_log_dir),
-            output_dir=paths_data.get('output_dir', PathsConfig.output_dir),
-            checkpoint_dir=paths_data.get('checkpoint_dir', PathsConfig.checkpoint_dir),
-            user_data_dir=paths_data.get('user_data_dir', PathsConfig.user_data_dir)
+            error_log_dir=resolve_path(paths_data.get('error_log_dir', PathsConfig.error_log_dir), PathsConfig.error_log_dir),
+            output_dir=resolve_path(paths_data.get('output_dir', PathsConfig.output_dir), PathsConfig.output_dir),
+            checkpoint_dir=resolve_path(paths_data.get('checkpoint_dir', PathsConfig.checkpoint_dir), PathsConfig.checkpoint_dir),
+            user_data_dir=resolve_path(paths_data.get('user_data_dir', PathsConfig.user_data_dir), PathsConfig.user_data_dir)
         )
         
         # 日志配置

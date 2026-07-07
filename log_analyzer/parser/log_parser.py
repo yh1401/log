@@ -3,6 +3,7 @@
 import re
 import os
 import mmap
+import json
 import asyncio
 import aiofiles
 from dataclasses import dataclass, field
@@ -10,6 +11,14 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any, Iterator, Tuple, AsyncIterator
 from enum import Enum
 from functools import lru_cache
+
+# 导入统一格式解析器
+from .format_parser import (
+    FormatParserFactory, FormatType, 
+    LogEntry, FormatParser,
+    JSONFormatParser, CSVFormatParser, XMLFormatParser,
+    ExcelFormatParser, PDFFormatParser
+)
 
 
 class LogLevel(Enum):
@@ -46,13 +55,49 @@ LOG_PATTERN = re.compile(
     r'\s+-\s+(.*)$'  # message
 )
 
+JAVA_LOG_PATTERN = re.compile(
+    r'^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\]'  # timestamp [2026-06-21 20:00:00,000]
+    r'\s+\[(\w+)\s*\]'  # log level [INFO ]
+    r'\s+\[LOGID:([^\]]+)\]'  # LOGID [LOGID:xxx]
+    r'\s+([^\s]+)'  # thread name
+    r'\s+([^\s]+)'  # class name
+    r'\s+-\s+(.*)$'  # message
+)
+
+TRACE_LOG_PATTERN = re.compile(
+    r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})'  # timestamp 2026-06-21 20:00:00.005
+    r'\s+(\w+)'  # log level INFO/ERROR
+    r'\s+([^\s]+)'  # method name
+    r'\s*-\s*(.*)$'  # message
+)
+
+CSV_LOG_PATTERN = re.compile(
+    r'^([a-f0-9]{32})\|'  # trace_id (32 hex chars)
+    r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\|'  # timestamp
+    r'([^\|]+)\|'  # class name
+    r'([^\|]+)\|'  # method name
+    r'([^\|]+)\|'  # device id
+    r'([^\|]+)'  # other fields
+)
+
 STACK_TRACE_START = re.compile(r'^[\t ]*(?:at |Caused by:|Suppressed:)')
 EXCEPTION_LINE = re.compile(r'^([a-zA-Z0-9\.]+(?:\.[a-zA-Z0-9\.]+)+):\s*(.*)$')
 
 ERROR_EXTRACT_PATTERN = re.compile(r'([\w\.]+Exception|[\w\.]+Error):\s*(.*)$')
 
+ERROR_INDICATORS = re.compile(
+    r'\b(?:Exception|Error|error|fail|failed|failure|exception|Exception|Error|'
+    r'Throwable|RuntimeException|IOException|NullPointerException|OutOfMemoryError|'
+    r'SocketTimeoutException|ConnectException|TimeoutException|IllegalArgumentException|'
+    r'IndexOutOfBoundsException|ClassNotFoundException|NoSuchMethodException|'
+    r'InvalidParameterException|UnauthorizedException|ForbiddenException|'
+    r'InternalServerError|ServiceUnavailable|DownstreamException|'
+    r'not found|notFound|NotFound|is null|is null|NullReference)\b',
+    re.IGNORECASE
+)
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(frozen=True)
 class ErrorPattern:
     pattern_type: str
     regex: str
@@ -61,7 +106,7 @@ class ErrorPattern:
     count: int = 0
 
 
-@dataclass(slots=True)
+@dataclass
 class ParsedLogEntry:
     timestamp: datetime
     thread_name: str
@@ -93,6 +138,12 @@ class ParsedLogEntry:
         if self.stack_trace and self.error_type:
             return f"[{self.level.value}] {self.error_type}: {self.error_message}"
         return f"[{self.level.value}] {self.message[:100]}"
+
+    def contains_error_indicators(self) -> bool:
+        if self.level in (LogLevel.ERROR, LogLevel.FATAL):
+            return True
+        full_text = f"{self.message} {self.stack_trace or ''}"
+        return bool(ERROR_INDICATORS.search(full_text))
 
 
 @dataclass
@@ -192,29 +243,92 @@ class LogParser:
 
     def parse_line(self, line: str, line_number: int) -> Optional[ParsedLogEntry]:
         match = LOG_PATTERN.match(line)
-        if not match:
-            return None
+        if match:
+            timestamp_str, thread_name, level_str, trace_id, class_name, message = match.groups()
+            timestamp = self._parse_timestamp(timestamp_str)
+            level = LogLevel.from_string(level_str)
+            entry = ParsedLogEntry(
+                timestamp=timestamp,
+                thread_name=thread_name.strip(),
+                level=level,
+                trace_id=trace_id,
+                class_name=class_name,
+                message=message,
+                raw_line=line,
+                line_number=line_number
+            )
+            if level == LogLevel.ERROR or level == LogLevel.FATAL:
+                self._extract_error_info(entry)
+            return entry
 
-        timestamp_str, thread_name, level_str, trace_id, class_name, message = match.groups()
+        match = JAVA_LOG_PATTERN.match(line)
+        if match:
+            timestamp_str, level_str, trace_id, thread_name, class_name, message = match.groups()
+            timestamp_str = timestamp_str.replace(',', '.')
+            timestamp = self._parse_timestamp(timestamp_str)
+            level = LogLevel.from_string(level_str)
+            entry = ParsedLogEntry(
+                timestamp=timestamp,
+                thread_name=thread_name.strip(),
+                level=level,
+                trace_id=trace_id,
+                class_name=class_name,
+                message=message,
+                raw_line=line,
+                line_number=line_number
+            )
+            if level == LogLevel.ERROR or level == LogLevel.FATAL:
+                self._extract_error_info(entry)
+            return entry
 
-        timestamp = self._parse_timestamp(timestamp_str)
-        level = LogLevel.from_string(level_str)
-        
-        entry = ParsedLogEntry(
-            timestamp=timestamp,
-            thread_name=thread_name.strip(),
-            level=level,
-            trace_id=trace_id,
-            class_name=class_name,
-            message=message,
-            raw_line=line,
-            line_number=line_number
-        )
+        match = TRACE_LOG_PATTERN.match(line)
+        if match:
+            timestamp_str, level_str, method_name, message = match.groups()
+            timestamp = self._parse_timestamp(timestamp_str)
+            level = LogLevel.from_string(level_str)
+            entry = ParsedLogEntry(
+                timestamp=timestamp,
+                thread_name="",
+                level=level,
+                trace_id="",
+                class_name=method_name,
+                message=message,
+                raw_line=line,
+                line_number=line_number
+            )
+            if level == LogLevel.ERROR or level == LogLevel.FATAL:
+                self._extract_error_info(entry)
+            return entry
 
-        if level == LogLevel.ERROR or level == LogLevel.FATAL:
-            self._extract_error_info(entry)
+        match = CSV_LOG_PATTERN.match(line)
+        if match:
+            trace_id, timestamp_str, class_name, method_name, device_id, other_fields = match.groups()
+            timestamp = self._parse_timestamp(timestamp_str)
+            message = f"method={method_name}, device_id={device_id}, fields={other_fields}"
+            
+            # 检测 other_fields 中是否包含错误关键词，动态决定日志级别
+            level = LogLevel.INFO
+            if ERROR_INDICATORS.search(other_fields):
+                level = LogLevel.ERROR
+            
+            entry = ParsedLogEntry(
+                timestamp=timestamp,
+                thread_name="",
+                level=level,
+                trace_id=trace_id,
+                class_name=class_name,
+                message=message,
+                raw_line=line,
+                line_number=line_number
+            )
+            
+            # 如果是错误级别，提取错误信息
+            if level == LogLevel.ERROR:
+                self._extract_error_info(entry)
+            
+            return entry
 
-        return entry
+        return None
 
     def _extract_error_info(self, entry: ParsedLogEntry) -> None:
         msg = entry.message
@@ -234,9 +348,20 @@ class LogParser:
         return bool(STACK_TRACE_START.match(line))
 
     def parse_file_stream(self, file_path: str) -> Iterator[Tuple[List[ParsedLogEntry], int, int]]:
+        """解析文件流，支持多种格式自动检测"""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Log file not found: {file_path}")
 
+        # 检测文件格式
+        file_format = FormatParserFactory.detect_format(file_path)
+        
+        # 如果是非标准日志格式，使用格式解析器
+        if file_format in [FormatType.JSON, FormatType.CSV, FormatType.XML, 
+                          FormatType.EXCEL, FormatType.PDF]:
+            yield from self._parse_with_format_parser(file_path, file_format)
+            return
+
+        # 标准日志格式解析
         entries: List[ParsedLogEntry] = []
         line_number = 0
         chunk_id = 0
@@ -285,10 +410,71 @@ class LogParser:
             if entries:
                 yield entries, chunk_id, line_number
 
+    def _parse_with_format_parser(self, file_path: str, file_format: FormatType) -> Iterator[Tuple[List[ParsedLogEntry], int, int]]:
+        """使用格式解析器解析非标准格式文件"""
+        parser = FormatParserFactory.get_parser(file_path)
+        chunk_id = 0
+        
+        for log_entries in parser.parse(file_path, self.chunk_size):
+            parsed_entries = [self._convert_log_entry(entry) for entry in log_entries]
+            if parsed_entries:
+                end_line = parsed_entries[-1].line_number
+                yield parsed_entries, chunk_id, end_line
+                chunk_id += 1
+
+    def _convert_log_entry(self, entry: LogEntry) -> ParsedLogEntry:
+        """将统一格式的 LogEntry 转换为 ParsedLogEntry"""
+        # 解析时间戳
+        timestamp = self._parse_timestamp(entry.timestamp) if entry.timestamp else datetime.now()
+        
+        # 解析日志级别
+        level_map = {
+            'DEBUG': LogLevel.DEBUG,
+            'INFO': LogLevel.INFO,
+            'WARN': LogLevel.WARN,
+            'WARNING': LogLevel.WARN,
+            'ERROR': LogLevel.ERROR,
+            'ERR': LogLevel.ERROR,
+            'FATAL': LogLevel.FATAL,
+            'CRITICAL': LogLevel.FATAL
+        }
+        level = level_map.get(entry.level.upper(), LogLevel.INFO)
+        
+        # 提取错误信息
+        parsed = ParsedLogEntry(
+            timestamp=timestamp,
+            thread_name=entry.raw_data.get('thread', ''),
+            level=level,
+            trace_id=entry.trace_id or entry.raw_data.get('trace_id', ''),
+            class_name=entry.class_name,
+            method=entry.method,
+            message=entry.message,
+            device_id=entry.device_id,
+            raw_line=json.dumps(entry.raw_data, ensure_ascii=False) if entry.raw_data else entry.message,
+            line_number=entry.line_number
+        )
+        
+        # 如果是错误级别，提取错误信息
+        if level in [LogLevel.ERROR, LogLevel.FATAL]:
+            self._extract_error_info(parsed)
+        
+        return parsed
+
     def parse_file_stream_mmap(self, file_path: str) -> Iterator[Tuple[List[ParsedLogEntry], int, int]]:
+        """使用mmap解析文件流，支持多种格式自动检测"""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Log file not found: {file_path}")
 
+        # 检测文件格式
+        file_format = FormatParserFactory.detect_format(file_path)
+        
+        # 如果是非标准日志格式，使用格式解析器（mmap不适合这些格式）
+        if file_format in [FormatType.JSON, FormatType.CSV, FormatType.XML, 
+                          FormatType.EXCEL, FormatType.PDF]:
+            yield from self._parse_with_format_parser(file_path, file_format)
+            return
+
+        # 标准日志格式解析（使用mmap优化大文件处理）
         entries: List[ParsedLogEntry] = []
         line_number = 0
         chunk_id = 0
@@ -339,9 +525,22 @@ class LogParser:
                 yield entries, chunk_id, line_number
 
     async def parse_file_stream_async(self, file_path: str) -> AsyncIterator[Tuple[List[ParsedLogEntry], int, int]]:
+        """异步解析文件流，支持多种格式自动检测"""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Log file not found: {file_path}")
 
+        # 检测文件格式
+        file_format = FormatParserFactory.detect_format(file_path)
+        
+        # 如果是非标准日志格式，使用格式解析器
+        if file_format in [FormatType.JSON, FormatType.CSV, FormatType.XML, 
+                          FormatType.EXCEL, FormatType.PDF]:
+            # 异步迭代器
+            for chunk in self._parse_with_format_parser(file_path, file_format):
+                yield chunk
+            return
+
+        # 标准日志格式解析
         entries: List[ParsedLogEntry] = []
         line_number = 0
         chunk_id = 0
@@ -502,5 +701,11 @@ class LogParser:
         
         with open(file_path, 'rb') as f:
             with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
-                buf = mm.read()
-                return buf.count(b'\n')
+                chunk_size = 64 * 1024 * 1024
+                count = 0
+                while True:
+                    chunk = mm.read(chunk_size)
+                    if not chunk:
+                        break
+                    count += chunk.count(b'\n')
+                return count

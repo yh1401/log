@@ -1527,12 +1527,29 @@ class ReportGenerator:
         summaries = []
         for analysis in result.analysis_results:
             if analysis.summary:
-                summaries.append(analysis.summary)
+                # 去重：同一内容的 summary 只写入一次
+                if analysis.summary not in summaries:
+                    summaries.append(analysis.summary)
 
         if not summaries:
             return f"本次分析处理了 {result.total_lines:,} 行日志数据，识别了 {result.statistics.get('by_level', {}).get('ERROR', 0):,} 个错误。"
 
-        return " ".join(summaries[:3])
+        return summaries[0]  # 只取第一个 summary，不再拼接避免重复
+
+    def _generate_combined_summary(self, results: List[ProcessingResult]) -> str:
+        """生成多个文件的合并摘要"""
+        file_summaries = []
+        for result in results:
+            summary = self._generate_summary(result)
+            if summary:
+                file_summaries.append(f"- **{os.path.basename(result.file_path)}**: {summary}")
+
+        if not file_summaries:
+            total_errors = sum(r.statistics.get('by_level', {}).get('ERROR', 0) for r in results)
+            total_lines = sum(r.total_lines for r in results)
+            return f"本次分析处理了 {len(results)} 个文件，共 {total_lines:,} 行日志，识别了 {total_errors:,} 个错误。"
+
+        return "\n".join(file_summaries)
 
     def to_html(self, report: Report) -> str:
         """Generate HTML report with Apple-style design."""

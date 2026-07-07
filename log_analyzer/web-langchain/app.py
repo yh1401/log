@@ -96,12 +96,12 @@ ChunkProcessor = processor_module.ChunkProcessor
 ProcessingResult = processor_module.ProcessingResult
 ReportGenerator = report_module.ReportGenerator
 
-# 目录设置
-UPLOAD_DIR = PROJECT_ROOT / "log_analyzer" / "uploads"
-REPORTS_DIR = PROJECT_ROOT / "log_analyzer" / "reports"
-LOGS_DIR = PROJECT_ROOT / "log_analyzer" / "logs"
-TASKS_DIR = PROJECT_ROOT / "log_analyzer" / "tasks"
-USERS_DIR = PROJECT_ROOT / "log_analyzer" / "users"
+# 目录设置（用户数据位于 PROJECT_ROOT 的父目录下）
+UPLOAD_DIR = PROJECT_ROOT.parent / "uploads"
+REPORTS_DIR = PROJECT_ROOT.parent / "reports"
+LOGS_DIR = PROJECT_ROOT / "logs"
+TASKS_DIR = PROJECT_ROOT.parent / "tasks"
+USERS_DIR = PROJECT_ROOT.parent / "users"
 
 # 确保目录存在
 ensure_dir(str(UPLOAD_DIR))
@@ -351,7 +351,7 @@ async def process_log_files(
 
     user_id = task_info.get("user_id", "default")
     user_reports_dir = Path(task_info.get("reports_dir", REPORTS_DIR))
-    user_checkpoints_dir = Path(task_info.get("checkpoints_dir", str(PROJECT_ROOT / "log_analyzer" / "checkpoints")))
+    user_checkpoints_dir = Path(task_info.get("checkpoints_dir", str(PROJECT_ROOT.parent / "checkpoints")))
 
     ensure_dir(str(user_reports_dir))
     ensure_dir(str(user_checkpoints_dir))

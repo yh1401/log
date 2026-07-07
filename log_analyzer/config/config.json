@@ -1,6 +1,6 @@
 {
   "llm": {
-    "api_url": "https://api.modelarts-maas.com/openai/v1",
+    "api_url": "https://api.modelarts-maas.com/openai/v1/chat/completions",
     "model_name": "qwen3-235b-a22b",
     "api_key": "BRgV89-5SaTf8jMPzw0rxbf8rPzT2M_5CidzMAFk-ltuODZSNhhR2pXogCr4A-u9tlHiPdoTKSvzEzVCYf4H1w",
     "backup_model": "deepseek-v3.2"
